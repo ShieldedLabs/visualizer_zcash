@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 winit = "0.30.12"
 softbuffer = "0.4.6"
+wide = "0.8.1"
+num_cpus = "1.17.0"
