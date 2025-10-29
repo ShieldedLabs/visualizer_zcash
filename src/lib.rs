@@ -161,6 +161,7 @@ pub fn main_thread_run_program() {
     let mut prev_frame_time_us = 0u64;
     let mut last_call_to_present_instant = Instant::now();
     let mut frame_is_actually_queued_by_us = false;
+    let mut wayland_dropped_a_frame_on_purpose_counter = 0usize;
 
     let mut s_thread_context = ThreadContext {
         wake_up_gate: AtomicU32::new(0),
@@ -190,8 +191,9 @@ pub fn main_thread_run_program() {
     let mut render_target_0_alloc_layout = Layout::new::<u32>();
     let mut render_target_0 = std::ptr::null_mut();
     let mut saved_tile_hashes = Vec::new();
+    let mut whole_screen_hash = 0u64;
 
-    let mut t = 0.0;
+    let mut t: f64 = 0.0;
     let mut mouse_box_x = 0u32;
     let mut mouse_box_y = 0u32;
 
@@ -262,6 +264,7 @@ pub fn main_thread_run_program() {
                                             let dt = 1000.0 / (frame_interval_milli_hertz as f64);
 
                                             t += dt;
+                                            let t = if (t as u64 / 10) & 1 != 0 { t } else { 0.0 };
                                             let (fx, _fy) = loop_curve(t.powf(1.6));
                                             let (_fx, fy) = loop_curve(t.powf(1.7));
                                             let ix = (500.0 + fx*40.0) as u32;
@@ -368,8 +371,18 @@ pub fn main_thread_run_program() {
                                                         //     row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
                                                         // }
                                                     }
-                                                }
-);
+                                                });
+                                            
+                                            let need_buffer_flip;
+                                            {
+                                                let mut hasher = xxhash3_64::Hasher::new();
+                                                hasher.write_usize(window_width);
+                                                hasher.write_usize(window_height);
+                                                for th in &saved_tile_hashes { hasher.write_u64(*th); }
+                                                let new_hash = hasher.finish();
+                                                need_buffer_flip = whole_screen_hash != new_hash;
+                                                whole_screen_hash = new_hash;
+                                            }
 
                                             prev_frame_time_us = begin_frame_instant.elapsed().as_micros() as u64;
 
@@ -387,7 +400,7 @@ pub fn main_thread_run_program() {
                                                 render_target_stride: draw_area_pixel_wide,
                                                 display_buffer_stride: window_width,
                                             };
-                                            dennis_parallel_for(p_thread_context, true, (window_height + 32 - 1) / 32, &ups as *const EndOfFrameBlitCtx as usize,
+                                            dennis_parallel_for(p_thread_context, true, (need_buffer_flip as usize)*((window_height + 32 - 1) / 32), &ups as *const EndOfFrameBlitCtx as usize,
                                             |thread_id: usize, work_id: usize, work_count: usize, user_pointer: usize| {
                                                 unsafe {
                                                     let p_thread_context = user_pointer as *mut EndOfFrameBlitCtx;
@@ -413,15 +426,21 @@ pub fn main_thread_run_program() {
 
                                             let frame_pace_us = last_call_to_present_instant.elapsed().as_micros() as u64;
                                             last_call_to_present_instant = Instant::now();
-                                            if okay_but_is_it_wayland(elwt) {
-                                                window.pre_present_notify();
+                                            if need_buffer_flip {
+                                                if okay_but_is_it_wayland(elwt) {
+                                                    window.pre_present_notify();
+                                                }
+                                                buffer.present().unwrap();
                                             }
-                                            buffer.present().unwrap();
                                             frame_is_actually_queued_by_us = false;
                                             // println!("frame time: {} us", prev_frame_time_us);
                                             // println!("frame pace: {} us", frame_pace_us);
                                             if okay_but_is_it_wayland(elwt) {
-                                                window.request_redraw();
+                                                if need_buffer_flip {
+                                                    window.request_redraw();
+                                                } else {
+                                                    wayland_dropped_a_frame_on_purpose_counter = 2;
+                                                }
                                             }
                                         }
                                     }
@@ -439,7 +458,16 @@ pub fn main_thread_run_program() {
                                 }
                             }
                             if okay_but_is_it_wayland(elwt) {
-                                elwt.set_control_flow(winit::event_loop::ControlFlow::Wait);
+                                if wayland_dropped_a_frame_on_purpose_counter == 2 {
+                                    wayland_dropped_a_frame_on_purpose_counter = 1;
+                                    elwt.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(Instant::now() + Duration::from_secs(1000) / frame_interval_milli_hertz));
+                                } else if wayland_dropped_a_frame_on_purpose_counter == 1 {
+                                    wayland_dropped_a_frame_on_purpose_counter = 0;
+                                    window.request_redraw();
+                                    elwt.set_control_flow(winit::event_loop::ControlFlow::Wait);
+                                } else {
+                                    elwt.set_control_flow(winit::event_loop::ControlFlow::Wait);
+                                }
                             } else {
                                 let now = Instant::now();
                                 if now >= next_frame_deadline {
