@@ -43,15 +43,15 @@ fn worker_thread_loop(thread_id: usize, p_thread_context: usize) {
                     continue;
                 }
 
-                let is_last_time = (*p_thread_context).is_last_time;
-                let work_count = (*p_thread_context).work_unit_count as usize;
-                let work_user_pointer = (*p_thread_context).work_user_pointer;
+                let is_last_time       = (*p_thread_context).is_last_time;
+                let work_count         = (*p_thread_context).work_unit_count as usize;
+                let work_user_pointer  = (*p_thread_context).work_user_pointer;
                 let work_user_function = (*p_thread_context).work_user_function;
                 loop {
                     let work_id = (*p_thread_context).work_unit_take.fetch_add(1, Ordering::Relaxed) as usize;
                     if work_id < work_count {
                         work_user_function(thread_id, work_id, work_count, work_user_pointer);
-                        
+
                         (*p_thread_context).work_unit_complete.fetch_add(1, Ordering::Release);
                     } else {
                         break;
@@ -64,30 +64,45 @@ fn worker_thread_loop(thread_id: usize, p_thread_context: usize) {
     }
 }
 
+// barrier()
+
+// while (work_a_left)
+// {
+//     work_a()
+// }
+
+// while (work_b_left)
+// {
+//     work_a()
+// }
+
+// barrier()
+
+
 fn dennis_parallel_for(p_thread_context: *mut ThreadContext, is_last_time: bool, work_count: usize, work_user_pointer: usize, work_user_function: WideWorkFn) {
     unsafe {
         let thread_count = (*p_thread_context).thread_count;
-        
+
         // Begin work gate should be closed.
         // We wait for the job site to be clear.
         while (*p_thread_context).workers_at_job_site.load(Ordering::Relaxed) != 0 { spin_loop(); }
-        
+
         (*p_thread_context).is_last_time = is_last_time;
         (*p_thread_context).work_unit_count = work_count as u32;
         (*p_thread_context).work_unit_take.store(0, Ordering::Relaxed);
         (*p_thread_context).work_unit_complete.store(0, Ordering::Relaxed);
         (*p_thread_context).work_user_pointer = work_user_pointer;
         (*p_thread_context).work_user_function = work_user_function;
-        
+
         // Open the gate and let workers descend.
         (*p_thread_context).begin_work_gate.store(1, Ordering::Release);
         // We could increment job site workers here but we are the only one who reads it so we will not.
-        
+
         loop {
             let work_id = (*p_thread_context).work_unit_take.fetch_add(1, Ordering::Relaxed) as usize;
             if work_id < work_count {
                 work_user_function(0, work_id, work_count, work_user_pointer);
-                
+
                 (*p_thread_context).work_unit_complete.fetch_add(1, Ordering::Release);
             } else {
                 break;
@@ -97,39 +112,8 @@ fn dennis_parallel_for(p_thread_context: *mut ThreadContext, is_last_time: bool,
         // But, if it is the last time we need to leave it open in order to let workers see that and go to sleep.
         if is_last_time == false
         { (*p_thread_context).begin_work_gate.store(0, Ordering::Relaxed); }
-    
+
         while (*p_thread_context).work_unit_complete.load(Ordering::Acquire) < work_count as u32 { spin_loop(); }
-    }
-}
-
-struct EndOfFrameBlitCtx {
-    render_target_0: *mut u8,
-    display_buffer: *mut u8,
-    row_count: usize,
-    render_target_stride: usize,
-    display_buffer_stride: usize,
-}
-
-fn end_of_frame_row_stride_copy(thread_id: usize, work_id: usize, work_count: usize, user_pointer: usize) {
-    unsafe {
-        let p_thread_context = user_pointer as *mut EndOfFrameBlitCtx;
-        let render_target_0 = (*p_thread_context).render_target_0;
-        let display_buffer = (*p_thread_context).display_buffer;
-        let row_count = (*p_thread_context).row_count;
-        let render_target_stride = (*p_thread_context).render_target_stride;
-        let display_buffer_stride = (*p_thread_context).display_buffer_stride;
-
-        let mut local_row_count = row_count / work_count;
-        let start_row = work_id * local_row_count;
-        if work_id == work_count - 1 {
-            local_row_count = row_count - start_row;
-        }
-
-        for row in start_row..start_row+local_row_count {
-            let pixel_src = render_target_0.byte_add(row*render_target_stride*4) as *mut u8;
-            let pixel_dst = display_buffer.byte_add(row*display_buffer_stride*4) as *mut u8;
-            copy_nonoverlapping(pixel_src, pixel_dst, display_buffer_stride*4);
-        }
     }
 }
 
@@ -143,92 +127,6 @@ enum DrawCommand {
     },
 }
 
-#[derive(Clone, Copy)]
-struct ExecuteCommandBufferOnTilesCtx {
-    render_target_0: *mut u8,
-    render_target_stride: usize,
-    window_width: usize,
-    window_height: usize,
-    saved_tile_hashes: *mut u64,
-    draw_commands: *const DrawCommand,
-    draw_command_count: usize,
-}
-
-fn execute_command_buffer_on_tiles(thread_id: usize, work_id: usize, work_count: usize, user_pointer: usize) {
-    unsafe {
-        let ctx = *(user_pointer as *const ExecuteCommandBufferOnTilesCtx);
-        let pixel_row_shift = ctx.render_target_stride.trailing_zeros() as usize;
-        let intra_row_mask = ctx.render_target_stride.wrapping_sub(1);
-        debug_assert!(work_count.count_ones() == 1);
-        let tile_row_shift = work_count.trailing_zeros() / 2;
-        let tile_x = work_id & (1usize << tile_row_shift).wrapping_sub(1);
-        let tile_y = work_id >> tile_row_shift;
-
-        let tile_pixel_x = (tile_x << RENDER_TILE_SHIFT) as u32;
-        let tile_pixel_x2 = ((tile_x+1) << RENDER_TILE_SHIFT) as u32;
-        let tile_pixel_y = (tile_y << RENDER_TILE_SHIFT) as u32;
-        let tile_pixel_y2 = ((tile_y+1) << RENDER_TILE_SHIFT) as u32;
-        if tile_pixel_x as usize >= ctx.window_width { return; }
-        if tile_pixel_y as usize >= ctx.window_height { return; }
-        
-        let mut got_hash = 0u64;
-        for should_draw in 0..2 {
-            let should_draw = should_draw == 1;
-            if should_draw {
-                let saved = ctx.saved_tile_hashes.byte_add(8*work_id);
-                if got_hash == *saved && TURN_OFF_HASH_BASED_LAZY_RENDER == 0 {
-                    return;
-                } else {
-                    *saved = got_hash;
-                }
-            }
-            let mut hasher = xxhash3_64::Hasher::new();
-            for cmd_i in 0..ctx.draw_command_count {
-                match *ctx.draw_commands.byte_add(size_of::<DrawCommand>()*cmd_i) {
-                    DrawCommand::ColoredRectangle { mut x, mut x2, mut y, mut y2, color } => {
-                        x = x.max(tile_pixel_x);
-                        x2 = x2.min(tile_pixel_x2);
-                        y = y.max(tile_pixel_y);
-                        y2 = y2.min(tile_pixel_y2);
-                        if x >= x2 || y >= y2 { continue; }
-                        hasher.write_u64(0x854893982097);
-                        hasher.write_u32(x);
-                        hasher.write_u32(x2);
-                        hasher.write_u32(y);
-                        hasher.write_u32(y2);
-                        hasher.write_u32(color);
-                        if should_draw == false { continue; }
-                        let mut row_pixels = ctx.render_target_0.byte_add(((x + (y << pixel_row_shift)) as usize) << 2);
-                        for _y in y..y2 {
-                            let mut cursor_pixels = row_pixels;
-                            for _x in x..x2 {
-                                *(cursor_pixels as *mut u32) = color;
-                                cursor_pixels = cursor_pixels.byte_add(4);
-                            }
-                            row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
-                        }
-                    }
-                }
-            }
-            got_hash = hasher.finish();
-        }
-
-        //     //0x3357FF, // Strong Blue
-            
-        // let wide_color = u32x4::splat(0xFF5733u32.wrapping_mul(thread_id as u32));
-        
-        // let tile_pixels = ctx.render_target_0.byte_add(((tile_x << RENDER_TILE_SHIFT) + (tile_y << RENDER_TILE_SHIFT << pixel_row_shift)) << 2);
-        // let mut row_pixels = tile_pixels;
-        // for _y in 0..RENDER_TILE_SIZE {
-        //     let mut cursor_pixels = row_pixels;
-        //     for _x in 0..RENDER_TILE_SIZE/4 {
-        //         *(cursor_pixels as *mut u32x4) = wide_color;
-        //         cursor_pixels = cursor_pixels.byte_add(4*4);
-        //     }
-        //     row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
-        // }
-    }
-}
 
 pub fn loop_curve(t: f64) -> (f64, f64) {
     // Tunables:
@@ -257,7 +155,7 @@ fn okay_but_is_it_wayland(elwt: &winit::event_loop::ActiveEventLoop) -> bool {
 pub fn main_thread_run_program() {
     // Create window + event loop.
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
-    
+
     let mut frame_interval_milli_hertz = 60000;
     let mut next_frame_deadline = Instant::now() + Duration::from_secs(1000) / frame_interval_milli_hertz;
     let mut prev_frame_time_us = 0u64;
@@ -276,7 +174,7 @@ pub fn main_thread_run_program() {
         work_unit_take: AtomicU32::new(0),
         work_unit_complete: AtomicU32::new(0),
         work_user_pointer: 0,
-        work_user_function: |_,_,_,_| {}, 
+        work_user_function: |_,_,_,_| {},
     };
     let p_thread_context: *mut ThreadContext = &mut s_thread_context as *mut ThreadContext;
 
@@ -338,13 +236,13 @@ pub fn main_thread_run_program() {
                                             (*p_thread_context).wake_up_gate.store(1, Ordering::Release);
 
                                             let begin_frame_instant = Instant::now();
-                                            
+
                                             let (window_width, window_height) = {
                                                 let size = window.inner_size();
                                                 (size.width as usize, size.height as usize)
                                             };
                                             softbuffer_surface.resize((window_width as u32).try_into().unwrap(), (window_height as u32).try_into().unwrap()).unwrap();
-                                            
+
                                             let mut buffer = softbuffer_surface.buffer_mut().unwrap();
                                             let final_output_blit_buffer = buffer.as_mut_ptr() as *mut u8;
                                             let window_square: usize = window_width.max(window_height);
@@ -375,6 +273,17 @@ pub fn main_thread_run_program() {
 
                                             draw_commands.push(DrawCommand::ColoredRectangle { x: mouse_box_x, x2: mouse_box_x + 100, y: mouse_box_y, y2: mouse_box_y+50, color: 0xFF3366 });
 
+                                            #[derive(Clone, Copy)]
+                                            struct ExecuteCommandBufferOnTilesCtx {
+                                                render_target_0: *mut u8,
+                                                render_target_stride: usize,
+                                                window_width: usize,
+                                                window_height: usize,
+                                                saved_tile_hashes: *mut u64,
+                                                draw_commands: *const DrawCommand,
+                                                draw_command_count: usize,
+                                            }
+
                                             let mut ups = ExecuteCommandBufferOnTilesCtx {
                                                 render_target_0,
                                                 render_target_stride: draw_area_pixel_wide,
@@ -384,10 +293,93 @@ pub fn main_thread_run_program() {
                                                 draw_commands: draw_commands.as_ptr(),
                                                 draw_command_count: draw_commands.len(),
                                             };
-                                            dennis_parallel_for(p_thread_context, false, tiles_wide*tiles_wide, &ups as *const ExecuteCommandBufferOnTilesCtx as usize, execute_command_buffer_on_tiles);
+                                            dennis_parallel_for(p_thread_context, false, tiles_wide*tiles_wide, &ups as *const ExecuteCommandBufferOnTilesCtx as usize,
+                                                |thread_id: usize, work_id: usize, work_count: usize, user_pointer: usize| {
+                                                    unsafe {
+                                                        let ctx = *(user_pointer as *const ExecuteCommandBufferOnTilesCtx);
+                                                        let pixel_row_shift = ctx.render_target_stride.trailing_zeros() as usize;
+                                                        let intra_row_mask = ctx.render_target_stride.wrapping_sub(1);
+                                                        debug_assert!(work_count.count_ones() == 1);
+                                                        let tile_row_shift = work_count.trailing_zeros() / 2;
+                                                        let tile_x = work_id & (1usize << tile_row_shift).wrapping_sub(1);
+                                                        let tile_y = work_id >> tile_row_shift;
+
+                                                        let tile_pixel_x = (tile_x << RENDER_TILE_SHIFT) as u32;
+                                                        let tile_pixel_x2 = ((tile_x+1) << RENDER_TILE_SHIFT) as u32;
+                                                        let tile_pixel_y = (tile_y << RENDER_TILE_SHIFT) as u32;
+                                                        let tile_pixel_y2 = ((tile_y+1) << RENDER_TILE_SHIFT) as u32;
+                                                        if tile_pixel_x as usize >= ctx.window_width { return; }
+                                                        if tile_pixel_y as usize >= ctx.window_height { return; }
+
+                                                        let mut got_hash = 0u64;
+                                                        for should_draw in 0..2 {
+                                                            let should_draw = should_draw == 1;
+                                                            if should_draw {
+                                                                let saved = ctx.saved_tile_hashes.byte_add(8*work_id);
+                                                                if got_hash == *saved && TURN_OFF_HASH_BASED_LAZY_RENDER == 0 {
+                                                                    return;
+                                                                } else {
+                                                                    *saved = got_hash;
+                                                                }
+                                                            }
+                                                            let mut hasher = xxhash3_64::Hasher::new();
+                                                            for cmd_i in 0..ctx.draw_command_count {
+                                                                match *ctx.draw_commands.byte_add(size_of::<DrawCommand>()*cmd_i) {
+                                                                    DrawCommand::ColoredRectangle { mut x, mut x2, mut y, mut y2, color } => {
+                                                                        x = x.max(tile_pixel_x);
+                                                                        x2 = x2.min(tile_pixel_x2);
+                                                                        y = y.max(tile_pixel_y);
+                                                                        y2 = y2.min(tile_pixel_y2);
+                                                                        if x >= x2 || y >= y2 { continue; }
+                                                                        hasher.write_u64(0x854893982097);
+                                                                        hasher.write_u32(x);
+                                                                        hasher.write_u32(x2);
+                                                                        hasher.write_u32(y);
+                                                                        hasher.write_u32(y2);
+                                                                        hasher.write_u32(color);
+                                                                        if should_draw == false { continue; }
+                                                                        let mut row_pixels = ctx.render_target_0.byte_add(((x + (y << pixel_row_shift)) as usize) << 2);
+                                                                        for _y in y..y2 {
+                                                                            let mut cursor_pixels = row_pixels;
+                                                                            for _x in x..x2 {
+                                                                                *(cursor_pixels as *mut u32) = color;
+                                                                                cursor_pixels = cursor_pixels.byte_add(4);
+                                                                            }
+                                                                            row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            got_hash = hasher.finish();
+                                                        }
+
+                                                        //     //0x3357FF, // Strong Blue
+
+                                                        // let wide_color = u32x4::splat(0xFF5733u32.wrapping_mul(thread_id as u32));
+
+                                                        // let tile_pixels = ctx.render_target_0.byte_add(((tile_x << RENDER_TILE_SHIFT) + (tile_y << RENDER_TILE_SHIFT << pixel_row_shift)) << 2);
+                                                        // let mut row_pixels = tile_pixels;
+                                                        // for _y in 0..RENDER_TILE_SIZE {
+                                                        //     let mut cursor_pixels = row_pixels;
+                                                        //     for _x in 0..RENDER_TILE_SIZE/4 {
+                                                        //         *(cursor_pixels as *mut u32x4) = wide_color;
+                                                        //         cursor_pixels = cursor_pixels.byte_add(4*4);
+                                                        //     }
+                                                        //     row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
+                                                        // }
+                                                    }
+                                                }
+);
 
                                             prev_frame_time_us = begin_frame_instant.elapsed().as_micros() as u64;
-                                            
+
+                                            struct EndOfFrameBlitCtx {
+                                                render_target_0: *mut u8,
+                                                display_buffer: *mut u8,
+                                                row_count: usize,
+                                                render_target_stride: usize,
+                                                display_buffer_stride: usize,
+                                            }
                                             let ups = EndOfFrameBlitCtx {
                                                 render_target_0,
                                                 display_buffer: final_output_blit_buffer,
@@ -395,8 +387,30 @@ pub fn main_thread_run_program() {
                                                 render_target_stride: draw_area_pixel_wide,
                                                 display_buffer_stride: window_width,
                                             };
-                                            dennis_parallel_for(p_thread_context, true, (window_height + 32 - 1) / 32, &ups as *const EndOfFrameBlitCtx as usize, end_of_frame_row_stride_copy);
-                                            
+                                            dennis_parallel_for(p_thread_context, true, (window_height + 32 - 1) / 32, &ups as *const EndOfFrameBlitCtx as usize,
+                                            |thread_id: usize, work_id: usize, work_count: usize, user_pointer: usize| {
+                                                unsafe {
+                                                    let p_thread_context = user_pointer as *mut EndOfFrameBlitCtx;
+                                                    let render_target_0 = (*p_thread_context).render_target_0;
+                                                    let display_buffer = (*p_thread_context).display_buffer;
+                                                    let row_count = (*p_thread_context).row_count;
+                                                    let render_target_stride = (*p_thread_context).render_target_stride;
+                                                    let display_buffer_stride = (*p_thread_context).display_buffer_stride;
+
+                                                    let mut local_row_count = row_count / work_count;
+                                                    let start_row = work_id * local_row_count;
+                                                    if work_id == work_count - 1 {
+                                                        local_row_count = row_count - start_row;
+                                                    }
+
+                                                    for row in start_row..start_row+local_row_count {
+                                                        let pixel_src = render_target_0.byte_add(row*render_target_stride*4) as *mut u8;
+                                                        let pixel_dst = display_buffer.byte_add(row*display_buffer_stride*4) as *mut u8;
+                                                        copy_nonoverlapping(pixel_src, pixel_dst, display_buffer_stride*4);
+                                                    }
+                                                }
+                                            });
+
                                             let frame_pace_us = last_call_to_present_instant.elapsed().as_micros() as u64;
                                             last_call_to_present_instant = Instant::now();
                                             if okay_but_is_it_wayland(elwt) {
@@ -431,7 +445,7 @@ pub fn main_thread_run_program() {
                                 if now >= next_frame_deadline {
                                     if last_call_to_present_instant > next_frame_deadline {
                                     } else {
-                                        frame_is_actually_queued_by_us = true;  
+                                        frame_is_actually_queued_by_us = true;
                                         window.request_redraw();
                                     }
                                     if now - next_frame_deadline > Duration::from_millis(250) {
