@@ -3,7 +3,7 @@ const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 0;
 
 use std::{alloc::{alloc, dealloc, Layout}, hash::Hasher, hint::spin_loop, ptr::{copy_nonoverlapping, slice_from_raw_parts}, rc::Rc, sync::{atomic::{AtomicU32, Ordering}, Barrier}, time::{Duration, Instant}};
 use twox_hash::xxhash3_64;
-use winit::{dpi::Size, platform::wayland::ActiveEventLoopExtWayland};
+use winit::dpi::Size;
 
 const RENDER_TILE_SHIFT: usize = 7;
 const RENDER_TILE_SIZE: usize = 1 << RENDER_TILE_SHIFT;
@@ -242,6 +242,18 @@ pub fn loop_curve(t: f64) -> (f64, f64) {
     (x, y)
 }
 
+fn okay_but_is_it_wayland(elwt: &winit::event_loop::ActiveEventLoop) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::wayland::ActiveEventLoopExtWayland;
+        elwt.is_wayland()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
 pub fn main_thread_run_program() {
     // Create window + event loop.
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
@@ -288,7 +300,7 @@ pub fn main_thread_run_program() {
     let mut window: Option<Rc<winit::window::Window>> = None;
     let mut softbuffer_context: Option<softbuffer::Context<Rc<winit::window::Window>>> = None;
     let mut softbuffer_surface: Option<softbuffer::Surface<Rc<winit::window::Window>, Rc<winit::window::Window>>> = None;
-    event_loop.run(move |event, elwt| {
+    event_loop.run(move |event, elwt: &winit::event_loop::ActiveEventLoop| {
         match event {
             winit::event::Event::Resumed => { // Runs at startup and is where we have to do init.
                 let twindow = Rc::new(elwt.create_window(
@@ -314,7 +326,7 @@ pub fn main_thread_run_program() {
                                     mouse_box_y = position.y as u32;
                                 },
                                 winit::event::WindowEvent::RedrawRequested => {
-                                    if frame_is_actually_queued_by_us || elwt.is_wayland() {
+                                    if frame_is_actually_queued_by_us || okay_but_is_it_wayland(elwt) {
                                         unsafe {
                                             // Tell workers: WAKE UP WAKE UP WAKE UP!!!
                                             while (*p_thread_context).workers_that_have_passed_the_wake_up_gate.load(Ordering::Relaxed) != (*p_thread_context).thread_count - 1 { spin_loop(); }
@@ -387,14 +399,14 @@ pub fn main_thread_run_program() {
                                             
                                             let frame_pace_us = last_call_to_present_instant.elapsed().as_micros() as u64;
                                             last_call_to_present_instant = Instant::now();
-                                            if elwt.is_wayland() {
+                                            if okay_but_is_it_wayland(elwt) {
                                                 window.pre_present_notify();
                                             }
                                             buffer.present().unwrap();
                                             frame_is_actually_queued_by_us = false;
                                             // println!("frame time: {} us", prev_frame_time_us);
                                             // println!("frame pace: {} us", frame_pace_us);
-                                            if elwt.is_wayland() {
+                                            if okay_but_is_it_wayland(elwt) {
                                                 window.request_redraw();
                                             }
                                         }
@@ -412,7 +424,7 @@ pub fn main_thread_run_program() {
                                     frame_interval_milli_hertz = refresh_rate;
                                 }
                             }
-                            if elwt.is_wayland() {
+                            if okay_but_is_it_wayland(elwt) {
                                 elwt.set_control_flow(winit::event_loop::ControlFlow::Wait);
                             } else {
                                 let now = Instant::now();
