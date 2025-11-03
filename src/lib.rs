@@ -1,7 +1,7 @@
 
 const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 0;
 
-use std::{alloc::{alloc, dealloc, Layout}, hash::Hasher, hint::spin_loop, ptr::{copy_nonoverlapping, slice_from_raw_parts}, rc::Rc, sync::{atomic::{AtomicU32, Ordering}, Barrier}, time::{Duration, Instant}};
+use std::{alloc::{alloc, dealloc, Layout}, hash::Hasher, hint::spin_loop, mem::transmute, ptr::{copy_nonoverlapping, slice_from_raw_parts}, rc::Rc, sync::{atomic::{AtomicU32, Ordering}, Barrier}, time::{Duration, Instant}};
 use twox_hash::xxhash3_64;
 use winit::dpi::Size;
 
@@ -133,6 +133,13 @@ enum DrawCommand {
         glyph_bitmap_run_len: usize,
         row_bitmaps: *const u8,
         bitmap_widths: *const u16,
+    },
+    PixelLineXDef { // will draw one pixel per x
+        x1: u16, // x1 must be less than x2
+        y1: u16,
+        x2: u16,
+        y2: u16,
+        color: u32,
     }
 }
 
@@ -350,7 +357,7 @@ pub fn main_thread_run_program() {
 
                                                         // 3) Set up a scaler (swash) for rasterizing glyph images
                                                         let mut _scale = ScaleContext::new();
-                                                        let mut scale = _scale.builder(swash_font).size(ppem).hint(true).build();
+                                                        let mut scale = _scale.builder(swash_font).size(ppem).hint(false).build();
 
                                                         let image = swash::scale::Render::new(&[
                                                             swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
@@ -389,6 +396,8 @@ pub fn main_thread_run_program() {
                                                 }
                                             }
 
+                                            draw_commands.push(DrawCommand::PixelLineXDef { x1: 50, y1: 500, x2: mouse_box_x as u16, y2: mouse_box_y as u16, color: 0xffbb00 });
+
                                             #[derive(Clone, Copy)]
                                             struct ExecuteCommandBufferOnTilesCtx {
                                                 render_target_0: *mut u8,
@@ -398,6 +407,33 @@ pub fn main_thread_run_program() {
                                                 saved_tile_hashes: *mut u64,
                                                 draw_commands: *const DrawCommand,
                                                 draw_command_count: usize,
+                                            }
+
+                                            fn blend_u32(color_1: u32, color_2: u32, blend: u32) -> u32 {
+                                                let b1 = (color_1 >> 0) & 0xff;
+                                                let g1 = (color_1 >> 8) & 0xff;
+                                                let r1 = (color_1 >> 16) & 0xff;
+                                                let b2 = (color_2 >> 0) & 0xff;
+                                                let g2 = (color_2 >> 8) & 0xff;
+                                                let r2 = (color_2 >> 16) & 0xff;
+                                                let b = (b1 as u32 * (255 - blend) + b2 * blend) / 255;
+                                                let g = (g1 as u32 * (255 - blend) + g2 * blend) / 255;
+                                                let r = (r1 as u32 * (255 - blend) + r2 * blend) / 255;
+                                                r << 16 | g << 8 | b
+                                            }
+                                            fn linear_to_srgb_one_channel_float(linear: f32) -> f32 {
+                                                if linear <= 0.0031308 {
+                                                    12.92 * linear
+                                                } else {
+                                                    1.055 * linear.powf(1.0 / 2.4) - 0.055
+                                                }
+                                            }
+                                            fn srgb_to_linear_one_channel_float(srgb: f32) -> f32 {
+                                                if srgb <= 0.04045 {
+                                                    srgb / 12.92
+                                                } else {
+                                                    ((srgb + 0.055) / 1.055).powf(2.4)
+                                                }
                                             }
 
                                             let mut ups = ExecuteCommandBufferOnTilesCtx {
@@ -497,17 +533,45 @@ pub fn main_thread_run_program() {
                                                                             for _ in 0..len {
                                                                                 let blend = *copy_data as u32;
                                                                                 copy_data = copy_data.byte_add(1);
-                                                                                let mut r = *put_data.byte_add(0);
-                                                                                let mut g = *put_data.byte_add(1);
-                                                                                let mut b = *put_data.byte_add(2);
-                                                                                b = ((b as u32 * (255 - blend) + ((color >> 0) & 0xff) * blend) / 255) as u8;
-                                                                                g = ((g as u32 * (255 - blend) + ((color >> 8) & 0xff) * blend) / 255) as u8;
-                                                                                r = ((r as u32 * (255 - blend) + ((color >> 16) & 0xff) * blend) / 255) as u8;
-                                                                                *(put_data as *mut u32) = (b as u32) << 16 | (g as u32) << 8 | (r as u32);
+                                                                                *(put_data as *mut u32) = blend_u32(*(put_data as *mut u32), color, blend);
                                                                                 put_data = put_data.byte_add(4);
                                                                             }
                                                                         }
-                                                                    }
+                                                                    },
+                                                                    DrawCommand::PixelLineXDef { x1, y1, x2, y2, color } => {
+                                                                        let start_x = (x1 as u32).max(tile_pixel_x);
+                                                                        let end_x = (x2 as u32).min(tile_pixel_x2);
+                                                                        if start_x >= end_x { continue; }
+                                                                        let dy = (y2 as f32 - y1 as f32) / (x2 - x1) as f32;
+                                                                        hasher.write_u64(0x75634593484);
+                                                                        hasher.write_u16(x1);
+                                                                        hasher.write_u16(x2);
+                                                                        hasher.write_u16(y1);
+                                                                        hasher.write_u16(y2);
+                                                                        hasher.write_u32(color);
+                                                                        hasher.write_u32(dy.to_bits());
+                                                                        if should_draw == false { continue; }
+                                                                        for real_x in start_x..end_x {
+                                                                            // ALT: anti-aliasing version
+                                                                            let fy = y1 as f32 + dy * (real_x - x1 as u32) as f32;
+                                                                            let fy1 = fy.floor();
+                                                                            let fy2 = fy.ceil();
+                                                                            let iy1 = fy1.round() as u32;
+                                                                            let iy2 = fy2.round() as u32;
+                                                                            let blend = (fy - fy2).abs();
+                                                                            let blend1 = (blend) * 255.0;
+                                                                            let blend2 = (1.0 - blend) * 255.0;
+
+                                                                            if iy1 >= tile_pixel_y && iy1 < tile_pixel_y2 {
+                                                                                let pixel = ctx.render_target_0.byte_add(((real_x + (iy1 << pixel_row_shift)) as usize) << 2);
+                                                                                *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
+                                                                            }
+                                                                            if iy2 >= tile_pixel_y && iy2 < tile_pixel_y2 {
+                                                                                let pixel = ctx.render_target_0.byte_add(((real_x + (iy2 << pixel_row_shift)) as usize) << 2);
+                                                                                *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend2 as u32);
+                                                                            }
+                                                                        }
+                                                                    },
                                                                 }
                                                             }
                                                             got_hash = hasher.finish();
