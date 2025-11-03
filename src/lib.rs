@@ -263,6 +263,15 @@ pub fn main_thread_run_program() {
     let mut mouse_box_x = 0u32;
     let mut mouse_box_y = 0u32;
 
+    let mut should_receive_mouse_events = true;
+    let mut inflight_mouse_events       = Vec::<(winit::event::MouseButton, winit::event::ElementState, u32, u32)>::new();
+    let mut inflight_keyboard_events    = Vec::<(winit::keyboard::KeyCode, winit::event::ElementState)>::new();
+
+    let mut mouse_events_last_frame    = [(false, 0u32, 0u32); 5];
+    let mut mouse_events_this_frame    = [(false, 0u32, 0u32); 5];
+    let mut keyboard_events_last_frame = [false; winit::keyboard::KeyCode::F35 as usize];
+    let mut keyboard_events_this_frame = [false; winit::keyboard::KeyCode::F35 as usize];
+
     let mut window: Option<Rc<winit::window::Window>> = None;
     let mut softbuffer_context: Option<softbuffer::Context<Rc<winit::window::Window>>> = None;
     let mut softbuffer_surface: Option<softbuffer::Surface<Rc<winit::window::Window>, Rc<winit::window::Window>>> = None;
@@ -287,9 +296,27 @@ pub fn main_thread_run_program() {
                     match event {
                         winit::event::Event::WindowEvent { window_id: _window_id, event } => {
                             match event {
+                                winit::event::WindowEvent::CursorEntered { device_id } |
+                                winit::event::WindowEvent::CursorLeft    { device_id } => {
+                                    should_receive_mouse_events = event == winit::event::WindowEvent::CursorEntered{ device_id };
+                                },
                                 winit::event::WindowEvent::CursorMoved { device_id, position } => {
                                     mouse_box_x = position.x as u32;
                                     mouse_box_y = position.y as u32;
+                                },
+                                winit::event::WindowEvent::MouseInput { device_id, state, button } => {
+                                    if should_receive_mouse_events {
+                                        inflight_mouse_events.push((button, state, mouse_box_x, mouse_box_y));
+                                    }
+                                },
+                                winit::event::WindowEvent::KeyboardInput { device_id, event, is_synthetic } => {
+                                    match event.physical_key {
+                                        winit::keyboard::PhysicalKey::Code(kc) => {
+                                            inflight_keyboard_events.push((kc, event.state));
+                                        }
+
+                                        _ => {},
+                                    }
                                 },
                                 winit::event::WindowEvent::RedrawRequested => {
                                     if frame_is_actually_queued_by_us || okay_but_is_it_wayland(elwt) {
@@ -327,6 +354,92 @@ pub fn main_thread_run_program() {
                                             }
 
                                             //////////////////////////////
+                                            // INPUT
+                                            //////////////////////////////
+                                            {
+                                                mouse_events_last_frame.copy_from_slice(&mouse_events_this_frame);
+                                                for e in mouse_events_this_frame.iter_mut() { *e = (false, 0, 0); }
+                                                for (button, state, x, y) in &inflight_mouse_events {
+                                                    let mut ptr: &mut (bool, u32, u32) = &mut (false, 0, 0);
+                                                    match button {
+                                                        winit::event::MouseButton::Left    => ptr = &mut mouse_events_this_frame[0],
+                                                        winit::event::MouseButton::Right   => ptr = &mut mouse_events_this_frame[1],
+                                                        winit::event::MouseButton::Middle  => ptr = &mut mouse_events_this_frame[2],
+                                                        winit::event::MouseButton::Back    => ptr = &mut mouse_events_this_frame[3],
+                                                        winit::event::MouseButton::Forward => ptr = &mut mouse_events_this_frame[4],
+                                                        _ => {},
+                                                    }
+
+                                                    *ptr = (state.is_pressed(), *x, *y);
+                                                }
+
+                                                keyboard_events_last_frame.copy_from_slice(&keyboard_events_this_frame);
+                                                for e in keyboard_events_this_frame.iter_mut() { *e = false; }
+                                                for (key, state) in &inflight_keyboard_events {
+                                                    keyboard_events_this_frame[*key as usize] = state.is_pressed();
+                                                }
+
+                                                inflight_mouse_events.clear();
+                                                inflight_keyboard_events.clear();
+                                            }
+
+                                            let key_pressed = | key: winit::keyboard::KeyCode | {
+                                                let idx = key as usize;
+                                                return keyboard_events_last_frame[idx] && !keyboard_events_this_frame[idx];
+                                            };
+                                            let key_held = | key: winit::keyboard::KeyCode | {
+                                                let idx = key as usize;
+                                                return keyboard_events_last_frame[idx] && keyboard_events_this_frame[idx];
+                                            };
+                                            let mouse_pressed = | button: winit::event::MouseButton | -> (bool, u32, u32) {
+                                                let state_last_frame = match button {
+                                                    winit::event::MouseButton::Left    => mouse_events_last_frame[0],
+                                                    winit::event::MouseButton::Right   => mouse_events_last_frame[1],
+                                                    winit::event::MouseButton::Middle  => mouse_events_last_frame[2],
+                                                    winit::event::MouseButton::Back    => mouse_events_last_frame[3],
+                                                    winit::event::MouseButton::Forward => mouse_events_last_frame[4],
+                                                    _ => (false, 0, 0) ,
+                                                };
+                                                let state_this_frame = match button {
+                                                    winit::event::MouseButton::Left    => mouse_events_this_frame[0],
+                                                    winit::event::MouseButton::Right   => mouse_events_this_frame[1],
+                                                    winit::event::MouseButton::Middle  => mouse_events_this_frame[2],
+                                                    winit::event::MouseButton::Back    => mouse_events_this_frame[3],
+                                                    winit::event::MouseButton::Forward => mouse_events_this_frame[4],
+                                                    _ => (false, 0, 0) ,
+                                                };
+
+                                                let dx = state_this_frame.1.abs_diff(state_last_frame.1);
+                                                let dy = state_this_frame.2.abs_diff(state_last_frame.2);
+                                                return (state_this_frame.0 && !state_this_frame.0, dx, dy);
+                                            };
+                                            let mouse_pressed = | button: winit::event::MouseButton | -> (bool, u32, u32) {
+                                                let state_last_frame = match button {
+                                                    winit::event::MouseButton::Left    => mouse_events_last_frame[0],
+                                                    winit::event::MouseButton::Right   => mouse_events_last_frame[1],
+                                                    winit::event::MouseButton::Middle  => mouse_events_last_frame[2],
+                                                    winit::event::MouseButton::Back    => mouse_events_last_frame[3],
+                                                    winit::event::MouseButton::Forward => mouse_events_last_frame[4],
+                                                    _ => (false, 0, 0) ,
+                                                };
+                                                let state_this_frame = match button {
+                                                    winit::event::MouseButton::Left    => mouse_events_this_frame[0],
+                                                    winit::event::MouseButton::Right   => mouse_events_this_frame[1],
+                                                    winit::event::MouseButton::Middle  => mouse_events_this_frame[2],
+                                                    winit::event::MouseButton::Back    => mouse_events_this_frame[3],
+                                                    winit::event::MouseButton::Forward => mouse_events_this_frame[4],
+                                                    _ => (false, 0, 0) ,
+                                                };
+
+                                                let dx = state_this_frame.1.abs_diff(state_last_frame.1);
+                                                let dy = state_this_frame.2.abs_diff(state_last_frame.2);
+                                                return (state_this_frame.0 && state_this_frame.0, dx, dy);
+                                            };
+
+
+                                            //////////////////////////////
+                                            // UPDATE
+                                            //////////////////////////////
                                             let dt = 1000.0 / (frame_interval_milli_hertz as f64);
 
                                             t += dt;
@@ -335,6 +448,21 @@ pub fn main_thread_run_program() {
                                             let (_fx, fy) = loop_curve(t.powf(1.7));
                                             let ix = (500.0 + fx*40.0) as u32;
                                             let iy = (300.0 + fy*30.0) as u32;
+
+                                            if let (true, x, y) = mouse_pressed(winit::event::MouseButton::Left) {
+                                                println!("left click at {}, {}", x, y);
+                                            }
+                                            if let (true, x, y) = mouse_pressed(winit::event::MouseButton::Right) {
+                                                println!("right click at {}, {}", x, y);
+                                            }
+
+                                            if key_pressed(winit::keyboard::KeyCode::Space) {
+                                                println!("space pressed");
+                                            }
+
+                                            if key_pressed(winit::keyboard::KeyCode::Escape) {
+                                                elwt.exit();
+                                            }
 
                                             let mut draw_commands = Vec::new();
                                             draw_commands.push(DrawCommand::ColoredRectangle { x: 0, x2: window_width as u32, y: 0, y2: window_height as u32, color: 0x222222 });
@@ -376,17 +504,17 @@ pub fn main_thread_run_program() {
                                             for _ in 0..max_glyph_count { glyph_to_bitmap_index.push(u16::MAX); }
                                             {
                                                 let text_line = "Salvē | Hello | Привет | 你好 <- No Chinese because the fonts are very big.";
-    
+
                                                 let mut buf = UnicodeBuffer::new();
                                                 buf.set_direction(rustybuzz::Direction::LeftToRight);
                                                 buf.push_str(text_line);
                                                 buf.set_direction(rustybuzz::Direction::LeftToRight);
-    
+
                                                 let shaped = shape(&rb_face, &[], buf);
                                                 let infos = shaped.glyph_infos();
                                                 let poss = shaped.glyph_positions();
                                                 assert_eq!(infos.len(), poss.len());
-                                                
+
                                                 let mut acc_x = -50;
                                                 for text_index in 0..infos.len() {
                                                     let g_info = &infos[text_index];
@@ -413,7 +541,7 @@ pub fn main_thread_run_program() {
                                                         .format(swash::zeno::Format::Alpha)
                                                         .render(&mut scale, g_info.glyph_id as u16).unwrap();
                                                         assert_eq!(image.content, swash::scale::image::Content::Mask);
-                                                        
+
                                                         for y in 0..target_px_height {
                                                             let row_len = 1usize << glyph_row_shift;
                                                             let row_put = &mut row_buffers[y];
@@ -645,7 +773,7 @@ pub fn main_thread_run_program() {
                                                         }
                                                     }
                                                 });
-                                            
+
                                             let need_buffer_flip;
                                             {
                                                 let mut hasher = xxhash3_64::Hasher::new();
