@@ -125,6 +125,15 @@ enum DrawCommand {
         y2: u32,
         color: u32,
     },
+    TextRow {
+        y: u16,
+        glyph_row_shift: u8,
+        color: u32,
+        glyph_bitmap_run: *const (u16, i16),
+        glyph_bitmap_run_len: usize,
+        row_bitmaps: *const u8,
+        bitmap_widths: *const u16,
+    }
 }
 
 
@@ -279,25 +288,40 @@ pub fn main_thread_run_program() {
 
                                             draw_commands.push(DrawCommand::ColoredRectangle { x: mouse_box_x, x2: mouse_box_x + 100, y: mouse_box_y, y2: mouse_box_y+50, color: 0xFF3366 });
 
+                                            use rustybuzz::{shape, Face as RbFace, UnicodeBuffer};
+                                            use swash::{scale::ScaleContext, FontRef};
+                                            let rb_face = RbFace::from_slice(SOURCE_SERIF, 0).expect("bad font");
+                                            let swash_font = FontRef::from_index(SOURCE_SERIF, 0).expect("font ref");
+
+                                            // DO NOT SET TARGET SIZE TO ZERO. Swash gets very flow in that case.
+                                            let target_px_height: usize = mouse_box_y.min(512).max(1) as usize;
+                                            let units_per_em: f32;
+                                            let ppem;
+                                            let glyph_row_shift: usize;
+                                            let baseline_y: usize;
+                                            let max_glyph_count;
                                             {
-                                                use rustybuzz::{shape, Face as RbFace, UnicodeBuffer};
-                                                use swash::{scale::ScaleContext, FontRef};
-                                                let rb_face = RbFace::from_slice(SOURCE_SERIF, 0).expect("bad font");
-                                                let swash_font = FontRef::from_index(SOURCE_SERIF, 0).expect("font ref");
+                                                let m = swash_font.metrics(&[]);
+                                                units_per_em = m.units_per_em as f32;
+                                                ppem = target_px_height as f32 / ((m.ascent + m.descent + m.leading) / units_per_em);
+                                                glyph_row_shift = (((m.max_width / units_per_em) * ppem).ceil() as usize).next_power_of_two().trailing_zeros() as usize;
+                                                baseline_y = ((m.descent / units_per_em) * ppem).ceil() as usize;
+                                                max_glyph_count = m.glyph_count;
+                                            }
+                                            //println!("h: {} -> ppem: {} and 1 << glyph_row_shift: {} baseline_y: {}", target_px_height, ppem, 1 << glyph_row_shift, baseline_y);
 
-                                                let target_px_height: usize = 16;
-                                                let ppem;
-                                                let glyph_row_shift: usize;
-                                                let baseline_y: usize;
-                                                {
-                                                    let m = swash_font.metrics(&[]);
-                                                    ppem = target_px_height as f32 / ((m.ascent + m.descent + m.leading) / m.units_per_em as f32);
-                                                    glyph_row_shift = (((m.max_width / m.units_per_em as f32) * ppem).ceil() as usize).next_power_of_two().trailing_zeros() as usize;
-                                                    baseline_y = ((m.descent / m.units_per_em as f32) * ppem).ceil() as usize;
-                                                }
-                                                println!("h: {} -> ppem: {} and 1 << glyph_row_shift: {} baseline_y: {}", target_px_height, ppem, 1 << glyph_row_shift, baseline_y);
+                                            // temp
+                                            let mut glyph_bitmap_run: Vec<(u16, i16)> = Vec::new();
 
-                                                let text_line = "gēello | Salvē | Привет | 你好";
+
+                                            let mut row_buffers: Vec<Vec<u8>> = Vec::new();
+                                            let mut cached_bitmaps_counter = 0;
+                                            let mut cached_bitmap_widths = Vec::new();
+                                            let mut glyph_to_bitmap_index = Vec::new();
+                                            for _ in 0..target_px_height { row_buffers.push(Vec::new()); }
+                                            for _ in 0..max_glyph_count { glyph_to_bitmap_index.push(u16::MAX); }
+                                            {
+                                                let text_line = "Salvē | Hello | Привет | 你好 <- No Chinese because the fonts are very big.";
     
                                                 let mut buf = UnicodeBuffer::new();
                                                 buf.set_direction(rustybuzz::Direction::LeftToRight);
@@ -308,63 +332,60 @@ pub fn main_thread_run_program() {
                                                 let infos = shaped.glyph_infos();
                                                 let poss = shaped.glyph_positions();
                                                 assert_eq!(infos.len(), poss.len());
+                                                
+                                                let mut acc_x = -50;
+                                                for text_index in 0..infos.len() {
+                                                    let g_info = &infos[text_index];
+                                                    let g_pos = &poss[text_index];
+                                                    if acc_x > window_width as i16 { break; }
 
-                                                // for i in 0..infos.len() {
-                                                //     println!("info: {:?}", infos[i]);
-                                                //     println!("pos: {:?}", poss[i]);
-                                                // }
+                                                    if glyph_to_bitmap_index[g_info.glyph_id as usize] == u16::MAX
+                                                    {
+                                                        let bitmap_index = cached_bitmaps_counter;
+                                                        cached_bitmaps_counter += 1;
+                                                        glyph_to_bitmap_index[g_info.glyph_id as usize] = bitmap_index;
 
-                                                // 3) Set up a scaler (swash) for rasterizing glyph images
-                                                let mut _scale = ScaleContext::new();
-                                                let mut scale = _scale.builder(swash_font).size(ppem).hint(true).build();
+                                                        let px_advance = (((g_pos.x_advance as f32 / units_per_em) * ppem).ceil() as usize).min(1usize << glyph_row_shift);
+                                                        cached_bitmap_widths.push(px_advance as u16);
 
-                                                let mut image = swash::scale::Render::new(&[
-                                                    swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
-                                                    swash::scale::Source::Outline,
-                                                ])
-                                                .format(swash::zeno::Format::Alpha)
-                                                .render(&mut scale, infos[0].glyph_id as u16).unwrap();
-                                                assert_eq!(image.content, swash::scale::image::Content::Mask);
-                                                println!("{:?}", image.placement);
-                                                for y in 0..target_px_height {
-                                                    for x in 0..(1usize << glyph_row_shift) {
-                                                        let cx = (x as i32 - image.placement.left) as usize;
-                                                        let cy = (y as i32 - target_px_height as i32 + image.placement.top + baseline_y as i32) as usize;
-                                                        let blend: u8;
-                                                        if (cx as u32) < image.placement.width && (cy as u32) < image.placement.height {
-                                                            blend = image.data[image.placement.width as usize * cy + cx];
-                                                        } else {
-                                                            blend = 0;
+                                                        // 3) Set up a scaler (swash) for rasterizing glyph images
+                                                        let mut _scale = ScaleContext::new();
+                                                        let mut scale = _scale.builder(swash_font).size(ppem).hint(true).build();
+
+                                                        let image = swash::scale::Render::new(&[
+                                                            swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
+                                                            swash::scale::Source::Outline,
+                                                        ])
+                                                        .format(swash::zeno::Format::Alpha)
+                                                        .render(&mut scale, g_info.glyph_id as u16).unwrap();
+                                                        assert_eq!(image.content, swash::scale::image::Content::Mask);
+                                                        
+                                                        for y in 0..target_px_height {
+                                                            let row_len = 1usize << glyph_row_shift;
+                                                            let row_put = &mut row_buffers[y];
+                                                            for x in 0..row_len {
+                                                                let cx = (x as i32 - image.placement.left) as usize;
+                                                                let cy = (y as i32 - target_px_height as i32 + image.placement.top + baseline_y as i32) as usize;
+                                                                let blend: u8;
+                                                                if (cx as u32) < image.placement.width && (cy as u32) < image.placement.height {
+                                                                    blend = image.data[image.placement.width as usize * cy + cx];
+                                                                } else {
+                                                                    blend = 0;
+                                                                }
+                                                                row_put.push(blend);
+                                                            }
+                                                            assert_eq!(row_put.len(), row_len * cached_bitmaps_counter as usize);
                                                         }
-                                                        let color = 0xffffff^(((blend as u32) << 0)|((blend as u32) << 8)|((blend as u32) << 16));
-                                                        let x = x as u32;
-                                                        let y = y as u32;
-                                                        draw_commands.push(DrawCommand::ColoredRectangle { x: x, x2: x+1, y: y, y2: y+1, color: color });
                                                     }
+
+                                                    glyph_bitmap_run.push((glyph_to_bitmap_index[g_info.glyph_id as usize], acc_x));
+                                                    let px_advance = (((g_pos.x_advance as f32 / units_per_em) * ppem).ceil() as usize).min(1usize << glyph_row_shift);
+                                                    acc_x += px_advance as i16;
                                                 }
-                                                let mut image = swash::scale::Render::new(&[
-                                                    swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
-                                                    swash::scale::Source::Outline,
-                                                ])
-                                                .format(swash::zeno::Format::Alpha)
-                                                .render(&mut scale, infos[1].glyph_id as u16).unwrap();
-                                                assert_eq!(image.content, swash::scale::image::Content::Mask);
-                                                println!("{:?}", image.placement);
+
                                                 for y in 0..target_px_height {
-                                                    for x in 0..(1usize << glyph_row_shift) {
-                                                        let cx = (x as i32 - image.placement.left) as usize;
-                                                        let cy = (y as i32 - target_px_height as i32 + image.placement.top + baseline_y as i32) as usize;
-                                                        let blend: u8;
-                                                        if (cx as u32) < image.placement.width && (cy as u32) < image.placement.height {
-                                                            blend = image.data[image.placement.width as usize * cy + cx];
-                                                        } else {
-                                                            blend = 0;
-                                                        }
-                                                        let color = 0xffffff^(((blend as u32) << 0)|((blend as u32) << 8)|((blend as u32) << 16));
-                                                        let x = x as u32;
-                                                        let y = y as u32;
-                                                        draw_commands.push(DrawCommand::ColoredRectangle { x: 100+x, x2: 100+x+1, y: y, y2: y+1, color: color });
-                                                    }
+                                                    let row_data = &row_buffers[y];
+                                                    draw_commands.push(DrawCommand::TextRow { y: y as u16 + 200, glyph_row_shift: glyph_row_shift as u8, color: 0xFFFFFFu32, glyph_bitmap_run: glyph_bitmap_run.as_ptr(), glyph_bitmap_run_len: glyph_bitmap_run.len(), row_bitmaps: row_data.as_ptr(), bitmap_widths: cached_bitmap_widths.as_ptr(), });
                                                 }
                                             }
 
@@ -441,6 +462,50 @@ pub fn main_thread_run_program() {
                                                                                 cursor_pixels = cursor_pixels.byte_add(4);
                                                                             }
                                                                             row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
+                                                                        }
+                                                                    },
+                                                                    DrawCommand::TextRow { y, glyph_row_shift, color, glyph_bitmap_run, glyph_bitmap_run_len, row_bitmaps, bitmap_widths } => {
+                                                                        if (y as u32) < tile_pixel_y || (y as u32) >= tile_pixel_y2 { continue; }
+                                                                        for i in 0..glyph_bitmap_run_len {
+                                                                            let (lookup_index, start_x) = *glyph_bitmap_run.add(i);
+                                                                            let width = *bitmap_widths.add(lookup_index as usize) as usize;
+
+                                                                            if (start_x as isize + width as isize - 1) < tile_pixel_x as isize { continue; }
+                                                                            if (start_x as isize) >= tile_pixel_x2 as isize { break; }
+                                                                            hasher.write_u64(0x8936730958944);
+                                                                            hasher.write_u16(lookup_index);
+                                                                            hasher.write_i16(start_x);
+                                                                            hasher.write_u16(y);
+                                                                            hasher.write_usize(row_bitmaps as usize);
+                                                                            hasher.write_usize(bitmap_widths as usize);
+                                                                            // TODO rethink, font id?
+                                                                            // TODO color
+                                                                            if should_draw == false { continue; }
+
+                                                                            let mut copy_data = row_bitmaps.byte_add((lookup_index as usize) << glyph_row_shift);
+                                                                            let mut put_data = ctx.render_target_0.byte_add((y as usize) << (pixel_row_shift+2)).byte_offset(start_x as isize *4);
+
+                                                                            let mut x1 = start_x as isize;
+                                                                            let x2 = (start_x as isize + width as isize).min(tile_pixel_x2 as isize);
+                                                                            if x1 < tile_pixel_x as isize {
+                                                                                copy_data = copy_data.byte_add((tile_pixel_x as isize - x1) as usize);
+                                                                                put_data = put_data.byte_add((tile_pixel_x as isize - x1) as usize * 4);
+                                                                                x1 = tile_pixel_x as isize;
+                                                                            }
+                                                                            let len = x2 - x1;
+                                                                            debug_assert!(len != 0);
+                                                                            for _ in 0..len {
+                                                                                let blend = *copy_data as u32;
+                                                                                copy_data = copy_data.byte_add(1);
+                                                                                let mut r = *put_data.byte_add(0);
+                                                                                let mut g = *put_data.byte_add(1);
+                                                                                let mut b = *put_data.byte_add(2);
+                                                                                b = ((b as u32 * (255 - blend) + ((color >> 0) & 0xff) * blend) / 255) as u8;
+                                                                                g = ((g as u32 * (255 - blend) + ((color >> 8) & 0xff) * blend) / 255) as u8;
+                                                                                r = ((r as u32 * (255 - blend) + ((color >> 16) & 0xff) * blend) / 255) as u8;
+                                                                                *(put_data as *mut u32) = (b as u32) << 16 | (g as u32) << 8 | (r as u32);
+                                                                                put_data = put_data.byte_add(4);
+                                                                            }
                                                                         }
                                                                     }
                                                                 }
