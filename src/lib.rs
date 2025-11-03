@@ -1,4 +1,7 @@
 
+use other_file::*;
+mod other_file;
+
 const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 0;
 
 use std::{alloc::{alloc, dealloc, Layout}, hash::Hasher, hint::spin_loop, mem::transmute, ptr::{copy_nonoverlapping, slice_from_raw_parts}, rc::Rc, sync::{atomic::{AtomicU32, Ordering}, Barrier}, time::{Duration, Instant}};
@@ -117,6 +120,50 @@ fn dennis_parallel_for(p_thread_context: *mut ThreadContext, is_last_time: bool,
     }
 }
 
+fn draw_measure_text_line(draw_ctx: &DrawCtx, text_height: isize, text_line: &str) -> isize {
+    return 0;
+}
+fn draw_text_line(draw_ctx: &DrawCtx, x: isize, y: isize, text_height: isize, text_line: &str, color: u32) {
+    
+}
+fn draw_set_scissor(draw_ctx: &DrawCtx, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
+    
+}
+fn draw_rectangle(draw_ctx: &DrawCtx, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
+    unsafe {
+        let put = draw_ctx.draw_command_buffer.add(*draw_ctx.draw_command_count);
+        *draw_ctx.draw_command_count += 1;
+        *put = DrawCommand::ColoredRectangle { x: x1.max(0) as u32, x2: x2.min(draw_ctx.window_width) as u32, y: y1.max(0) as u32, y2: y2.min(draw_ctx.window_height) as u32, color: color };
+    }
+}
+
+
+
+struct FontTracker {
+    target_px_height: usize,
+    units_per_em: f32,
+    ppem: f32,
+    glyph_row_shift: usize,
+    baseline_y: usize,
+    max_glyph_count: usize,
+    row_buffers: Vec<Vec<u8>>,
+    cached_bitmaps_counter: usize,
+    cached_bitmap_widths: Vec<u16>,
+    glyph_to_bitmap_index: Vec<u16>,
+}
+
+struct DrawCtx {
+    window_width: isize,
+    window_height: isize,
+    draw_command_buffer: *mut DrawCommand,
+    draw_command_count: *mut usize,
+    glyph_bitmap_run_allocator: *mut (u16, i16),
+    glyph_bitmap_run_allocator_position: *mut usize,
+    font_tracker_buffer: *mut FontTracker,
+    font_tracker_count: *mut usize,
+}
+
+#[derive(Clone, Copy, Debug)]
 enum DrawCommand {
     ColoredRectangle {
         x: u32,
@@ -132,7 +179,7 @@ enum DrawCommand {
         glyph_bitmap_run: *const (u16, i16),
         glyph_bitmap_run_len: usize,
         row_bitmaps: *const u8,
-        bitmap_widths: *const u16,
+        bitmap_widths: *const u16, // TODO not this because scissor
     },
     PixelLineXDef { // will draw one pixel per x
         x1: u16, // x1 must be less than x2
@@ -395,6 +442,26 @@ pub fn main_thread_run_program() {
                                                     draw_commands.push(DrawCommand::TextRow { y: y as u16 + 200, glyph_row_shift: glyph_row_shift as u8, color: 0xFFFFFFu32, glyph_bitmap_run: glyph_bitmap_run.as_ptr(), glyph_bitmap_run_len: glyph_bitmap_run.len(), row_bitmaps: row_data.as_ptr(), bitmap_widths: cached_bitmap_widths.as_ptr(), });
                                                 }
                                             }
+
+                                            let mut _draw_command_count = 0usize;
+                                            let mut _glyph_bitmap_run_allocator_position = 0usize;
+                                            let mut _font_tracker_count = 0usize;
+                                            // Do draw stuff with the good API
+                                            let mut draw_ctx = unsafe { DrawCtx {
+                                                window_width: window_width as isize,
+                                                window_height: window_height as isize,
+                                                draw_command_buffer: alloc(Layout::array::<DrawCommand>(8192).unwrap()) as *mut DrawCommand,
+                                                draw_command_count: (&mut _draw_command_count) as *mut usize,
+                                                glyph_bitmap_run_allocator: alloc(Layout::array::<(u16, i16)>(8192).unwrap()) as *mut (u16, i16),
+                                                glyph_bitmap_run_allocator_position: (&mut _glyph_bitmap_run_allocator_position) as *mut usize,
+                                                font_tracker_buffer: alloc(Layout::array::<FontTracker>(8192).unwrap()) as *mut FontTracker,
+                                                font_tracker_count: (&mut _font_tracker_count) as *mut usize,
+                                            }};
+
+                                            demo_of_rendering_stuff_with_context_that_allocates_in_the_background(&draw_ctx);
+
+                                            // adapter
+                                            draw_commands.extend(std::slice::from_raw_parts(draw_ctx.draw_command_buffer as *const DrawCommand, *draw_ctx.draw_command_count).iter());
 
                                             draw_commands.push(DrawCommand::PixelLineXDef { x1: 50, y1: 500, x2: mouse_box_x as u16, y2: mouse_box_y as u16, color: 0xffbb00 });
 
