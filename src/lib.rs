@@ -152,6 +152,9 @@ fn okay_but_is_it_wayland(elwt: &winit::event_loop::ActiveEventLoop) -> bool {
     }
 }
 
+pub static SOURCE_SERIF: &[u8] = include_bytes!("../assets/source_serif_4.ttf");
+pub static GOHUM_PIXEL: &[u8] = include_bytes!("../assets/gohum_pixel.ttf");
+
 pub fn main_thread_run_program() {
     // Create window + event loop.
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
@@ -276,6 +279,95 @@ pub fn main_thread_run_program() {
 
                                             draw_commands.push(DrawCommand::ColoredRectangle { x: mouse_box_x, x2: mouse_box_x + 100, y: mouse_box_y, y2: mouse_box_y+50, color: 0xFF3366 });
 
+                                            {
+                                                use rustybuzz::{shape, Face as RbFace, UnicodeBuffer};
+                                                use swash::{scale::ScaleContext, FontRef};
+                                                let rb_face = RbFace::from_slice(SOURCE_SERIF, 0).expect("bad font");
+                                                let swash_font = FontRef::from_index(SOURCE_SERIF, 0).expect("font ref");
+
+                                                let target_px_height: usize = 16;
+                                                let ppem;
+                                                let glyph_row_shift: usize;
+                                                let baseline_y: usize;
+                                                {
+                                                    let m = swash_font.metrics(&[]);
+                                                    ppem = target_px_height as f32 / ((m.ascent + m.descent + m.leading) / m.units_per_em as f32);
+                                                    glyph_row_shift = (((m.max_width / m.units_per_em as f32) * ppem).ceil() as usize).next_power_of_two().trailing_zeros() as usize;
+                                                    baseline_y = ((m.descent / m.units_per_em as f32) * ppem).ceil() as usize;
+                                                }
+                                                println!("h: {} -> ppem: {} and 1 << glyph_row_shift: {} baseline_y: {}", target_px_height, ppem, 1 << glyph_row_shift, baseline_y);
+
+                                                let text_line = "gēello | Salvē | Привет | 你好";
+    
+                                                let mut buf = UnicodeBuffer::new();
+                                                buf.set_direction(rustybuzz::Direction::LeftToRight);
+                                                buf.push_str(text_line);
+                                                buf.set_direction(rustybuzz::Direction::LeftToRight);
+    
+                                                let shaped = shape(&rb_face, &[], buf);
+                                                let infos = shaped.glyph_infos();
+                                                let poss = shaped.glyph_positions();
+                                                assert_eq!(infos.len(), poss.len());
+
+                                                // for i in 0..infos.len() {
+                                                //     println!("info: {:?}", infos[i]);
+                                                //     println!("pos: {:?}", poss[i]);
+                                                // }
+
+                                                // 3) Set up a scaler (swash) for rasterizing glyph images
+                                                let mut _scale = ScaleContext::new();
+                                                let mut scale = _scale.builder(swash_font).size(ppem).hint(true).build();
+
+                                                let mut image = swash::scale::Render::new(&[
+                                                    swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
+                                                    swash::scale::Source::Outline,
+                                                ])
+                                                .format(swash::zeno::Format::Alpha)
+                                                .render(&mut scale, infos[0].glyph_id as u16).unwrap();
+                                                assert_eq!(image.content, swash::scale::image::Content::Mask);
+                                                println!("{:?}", image.placement);
+                                                for y in 0..target_px_height {
+                                                    for x in 0..(1usize << glyph_row_shift) {
+                                                        let cx = (x as i32 - image.placement.left) as usize;
+                                                        let cy = (y as i32 - target_px_height as i32 + image.placement.top + baseline_y as i32) as usize;
+                                                        let blend: u8;
+                                                        if (cx as u32) < image.placement.width && (cy as u32) < image.placement.height {
+                                                            blend = image.data[image.placement.width as usize * cy + cx];
+                                                        } else {
+                                                            blend = 0;
+                                                        }
+                                                        let color = 0xffffff^(((blend as u32) << 0)|((blend as u32) << 8)|((blend as u32) << 16));
+                                                        let x = x as u32;
+                                                        let y = y as u32;
+                                                        draw_commands.push(DrawCommand::ColoredRectangle { x: x, x2: x+1, y: y, y2: y+1, color: color });
+                                                    }
+                                                }
+                                                let mut image = swash::scale::Render::new(&[
+                                                    swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
+                                                    swash::scale::Source::Outline,
+                                                ])
+                                                .format(swash::zeno::Format::Alpha)
+                                                .render(&mut scale, infos[1].glyph_id as u16).unwrap();
+                                                assert_eq!(image.content, swash::scale::image::Content::Mask);
+                                                println!("{:?}", image.placement);
+                                                for y in 0..target_px_height {
+                                                    for x in 0..(1usize << glyph_row_shift) {
+                                                        let cx = (x as i32 - image.placement.left) as usize;
+                                                        let cy = (y as i32 - target_px_height as i32 + image.placement.top + baseline_y as i32) as usize;
+                                                        let blend: u8;
+                                                        if (cx as u32) < image.placement.width && (cy as u32) < image.placement.height {
+                                                            blend = image.data[image.placement.width as usize * cy + cx];
+                                                        } else {
+                                                            blend = 0;
+                                                        }
+                                                        let color = 0xffffff^(((blend as u32) << 0)|((blend as u32) << 8)|((blend as u32) << 16));
+                                                        let x = x as u32;
+                                                        let y = y as u32;
+                                                        draw_commands.push(DrawCommand::ColoredRectangle { x: 100+x, x2: 100+x+1, y: y, y2: y+1, color: color });
+                                                    }
+                                                }
+                                            }
+
                                             #[derive(Clone, Copy)]
                                             struct ExecuteCommandBufferOnTilesCtx {
                                                 render_target_0: *mut u8,
@@ -355,21 +447,6 @@ pub fn main_thread_run_program() {
                                                             }
                                                             got_hash = hasher.finish();
                                                         }
-
-                                                        //     //0x3357FF, // Strong Blue
-
-                                                        // let wide_color = u32x4::splat(0xFF5733u32.wrapping_mul(thread_id as u32));
-
-                                                        // let tile_pixels = ctx.render_target_0.byte_add(((tile_x << RENDER_TILE_SHIFT) + (tile_y << RENDER_TILE_SHIFT << pixel_row_shift)) << 2);
-                                                        // let mut row_pixels = tile_pixels;
-                                                        // for _y in 0..RENDER_TILE_SIZE {
-                                                        //     let mut cursor_pixels = row_pixels;
-                                                        //     for _x in 0..RENDER_TILE_SIZE/4 {
-                                                        //         *(cursor_pixels as *mut u32x4) = wide_color;
-                                                        //         cursor_pixels = cursor_pixels.byte_add(4*4);
-                                                        //     }
-                                                        //     row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
-                                                        // }
                                                     }
                                                 });
                                             
