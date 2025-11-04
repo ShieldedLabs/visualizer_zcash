@@ -288,7 +288,7 @@ fn draw_text_line(draw_ctx: &DrawCtx, x: isize, text_y: isize, text_height: isiz
     }
 }
 fn draw_set_scissor(draw_ctx: &DrawCtx, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
-    
+
 }
 fn draw_rectangle(draw_ctx: &DrawCtx, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
     unsafe {
@@ -299,6 +299,78 @@ fn draw_rectangle(draw_ctx: &DrawCtx, x1: isize, y1: isize, x2: isize, y2: isize
 }
 
 
+#[derive(Debug)]
+struct InputCtx {
+    should_process_mouse_events: bool,
+    inflight_mouse_events:       Vec::<(winit::event::MouseButton, winit::event::ElementState, isize, isize)>,
+    inflight_keyboard_events:    Vec::<(winit::keyboard::KeyCode, winit::event::ElementState)>,
+
+    mouse_x: isize,
+    mouse_y: isize,
+    mouse_events_last_frame: [(bool, isize, isize); 5],
+    mouse_events_this_frame: [(bool, isize, isize); 5],
+
+    keyboard_events_last_frame: [bool; winit::keyboard::KeyCode::F35 as usize],
+    keyboard_events_this_frame: [bool; winit::keyboard::KeyCode::F35 as usize],
+}
+
+impl InputCtx {
+    fn key_pressed(&self, key: winit::keyboard::KeyCode) -> bool {
+        let idx = key as usize;
+        return self.keyboard_events_last_frame[idx] && !self.keyboard_events_this_frame[idx];
+    }
+
+    fn key_held(&self, key: winit::keyboard::KeyCode) -> bool {
+        let idx = key as usize;
+        return self.keyboard_events_last_frame[idx] && self.keyboard_events_this_frame[idx];
+    }
+
+    fn mouse_pressed(&self, button: winit::event::MouseButton) -> (bool, isize, isize) {
+        let state_last_frame = match button {
+            winit::event::MouseButton::Left    => self.mouse_events_last_frame[0],
+            winit::event::MouseButton::Right   => self.mouse_events_last_frame[1],
+            winit::event::MouseButton::Middle  => self.mouse_events_last_frame[2],
+            winit::event::MouseButton::Back    => self.mouse_events_last_frame[3],
+            winit::event::MouseButton::Forward => self.mouse_events_last_frame[4],
+            _ => (false, 0, 0) ,
+        };
+        let state_this_frame = match button {
+            winit::event::MouseButton::Left    => self.mouse_events_this_frame[0],
+            winit::event::MouseButton::Right   => self.mouse_events_this_frame[1],
+            winit::event::MouseButton::Middle  => self.mouse_events_this_frame[2],
+            winit::event::MouseButton::Back    => self.mouse_events_this_frame[3],
+            winit::event::MouseButton::Forward => self.mouse_events_this_frame[4],
+            _ => (false, 0, 0) ,
+        };
+
+        let dx = state_this_frame.1.abs_diff(state_last_frame.1) as isize;
+        let dy = state_this_frame.2.abs_diff(state_last_frame.2) as isize;
+        return (state_this_frame.0 && !state_this_frame.0, dx, dy);
+    }
+
+    fn mouse_held(&self, button: winit::event::MouseButton) -> (bool, isize, isize) {
+        let state_last_frame = match button {
+            winit::event::MouseButton::Left    => self.mouse_events_last_frame[0],
+            winit::event::MouseButton::Right   => self.mouse_events_last_frame[1],
+            winit::event::MouseButton::Middle  => self.mouse_events_last_frame[2],
+            winit::event::MouseButton::Back    => self.mouse_events_last_frame[3],
+            winit::event::MouseButton::Forward => self.mouse_events_last_frame[4],
+            _ => (false, 0, 0) ,
+        };
+        let state_this_frame = match button {
+            winit::event::MouseButton::Left    => self.mouse_events_this_frame[0],
+            winit::event::MouseButton::Right   => self.mouse_events_this_frame[1],
+            winit::event::MouseButton::Middle  => self.mouse_events_this_frame[2],
+            winit::event::MouseButton::Back    => self.mouse_events_this_frame[3],
+            winit::event::MouseButton::Forward => self.mouse_events_this_frame[4],
+            _ => (false, 0, 0) ,
+        };
+
+        let dx = state_this_frame.1.abs_diff(state_last_frame.1) as isize;
+        let dy = state_this_frame.2.abs_diff(state_last_frame.2) as isize;
+        return (state_this_frame.0 && state_this_frame.0, dx, dy);
+    }
+}
 
 struct FontTracker {
     target_px_height: usize,
@@ -420,18 +492,22 @@ pub fn main_thread_run_program() {
     let mut saved_tile_hashes = Vec::new();
     let mut whole_screen_hash = 0u64;
 
+    let mut input_ctx = InputCtx {
+        should_process_mouse_events: true,
+        inflight_mouse_events: Vec::new(),
+        inflight_keyboard_events: Vec::new(),
+
+        mouse_events_last_frame: [(false, 0, 0); _],
+        mouse_events_this_frame: [(false, 0, 0); _],
+
+        keyboard_events_last_frame: [false; _],
+        keyboard_events_this_frame: [false; _],
+
+        mouse_x: 0,
+        mouse_y: 0,
+    };
+
     let mut t: f64 = 0.0;
-    let mut mouse_box_x = 0u32;
-    let mut mouse_box_y = 0u32;
-
-    let mut should_receive_mouse_events = true;
-    let mut inflight_mouse_events       = Vec::<(winit::event::MouseButton, winit::event::ElementState, u32, u32)>::new();
-    let mut inflight_keyboard_events    = Vec::<(winit::keyboard::KeyCode, winit::event::ElementState)>::new();
-
-    let mut mouse_events_last_frame    = [(false, 0u32, 0u32); 5];
-    let mut mouse_events_this_frame    = [(false, 0u32, 0u32); 5];
-    let mut keyboard_events_last_frame = [false; winit::keyboard::KeyCode::F35 as usize];
-    let mut keyboard_events_this_frame = [false; winit::keyboard::KeyCode::F35 as usize];
 
     let mut window: Option<Rc<winit::window::Window>> = None;
     let mut softbuffer_context: Option<softbuffer::Context<Rc<winit::window::Window>>> = None;
@@ -459,21 +535,21 @@ pub fn main_thread_run_program() {
                             match event {
                                 winit::event::WindowEvent::CursorEntered { device_id } |
                                 winit::event::WindowEvent::CursorLeft    { device_id } => {
-                                    should_receive_mouse_events = event == winit::event::WindowEvent::CursorEntered{ device_id };
+                                    input_ctx.should_process_mouse_events = event == winit::event::WindowEvent::CursorEntered{ device_id };
                                 },
                                 winit::event::WindowEvent::CursorMoved { device_id, position } => {
-                                    mouse_box_x = position.x as u32;
-                                    mouse_box_y = position.y as u32;
+                                    input_ctx.mouse_x = position.x as isize;
+                                    input_ctx.mouse_y = position.y as isize;
                                 },
                                 winit::event::WindowEvent::MouseInput { device_id, state, button } => {
-                                    if should_receive_mouse_events {
-                                        inflight_mouse_events.push((button, state, mouse_box_x, mouse_box_y));
+                                    if input_ctx.should_process_mouse_events {
+                                        input_ctx.inflight_mouse_events.push((button, state, input_ctx.mouse_x, input_ctx.mouse_y));
                                     }
                                 },
                                 winit::event::WindowEvent::KeyboardInput { device_id, event, is_synthetic } => {
                                     match event.physical_key {
                                         winit::keyboard::PhysicalKey::Code(kc) => {
-                                            inflight_keyboard_events.push((kc, event.state));
+                                            input_ctx.inflight_keyboard_events.push((kc, event.state));
                                         }
 
                                         _ => {},
@@ -514,88 +590,33 @@ pub fn main_thread_run_program() {
                                                 saved_tile_hashes = vec![0u64; tiles_wide*tiles_wide];
                                             }
 
+
                                             //////////////////////////////
                                             // INPUT
                                             //////////////////////////////
-                                            {
-                                                mouse_events_last_frame.copy_from_slice(&mouse_events_this_frame);
-                                                for e in mouse_events_this_frame.iter_mut() { *e = (false, 0, 0); }
-                                                for (button, state, x, y) in &inflight_mouse_events {
-                                                    let mut ptr: &mut (bool, u32, u32) = &mut (false, 0, 0);
-                                                    match button {
-                                                        winit::event::MouseButton::Left    => ptr = &mut mouse_events_this_frame[0],
-                                                        winit::event::MouseButton::Right   => ptr = &mut mouse_events_this_frame[1],
-                                                        winit::event::MouseButton::Middle  => ptr = &mut mouse_events_this_frame[2],
-                                                        winit::event::MouseButton::Back    => ptr = &mut mouse_events_this_frame[3],
-                                                        winit::event::MouseButton::Forward => ptr = &mut mouse_events_this_frame[4],
-                                                        _ => {},
-                                                    }
+                                            input_ctx.mouse_events_last_frame.copy_from_slice(&input_ctx.mouse_events_this_frame);
+                                            for e in input_ctx.mouse_events_this_frame.iter_mut() { *e = (false, 0, 0); }
+                                            for (button, state, x, y) in &input_ctx.inflight_mouse_events {
+                                                let ptr = match button {
+                                                    winit::event::MouseButton::Left    => &mut input_ctx.mouse_events_this_frame[0],
+                                                    winit::event::MouseButton::Right   => &mut input_ctx.mouse_events_this_frame[1],
+                                                    winit::event::MouseButton::Middle  => &mut input_ctx.mouse_events_this_frame[2],
+                                                    winit::event::MouseButton::Back    => &mut input_ctx.mouse_events_this_frame[3],
+                                                    winit::event::MouseButton::Forward => &mut input_ctx.mouse_events_this_frame[4],
+                                                    _ => { continue; },
+                                                };
 
-                                                    *ptr = (state.is_pressed(), *x, *y);
-                                                }
-
-                                                keyboard_events_last_frame.copy_from_slice(&keyboard_events_this_frame);
-                                                for e in keyboard_events_this_frame.iter_mut() { *e = false; }
-                                                for (key, state) in &inflight_keyboard_events {
-                                                    keyboard_events_this_frame[*key as usize] = state.is_pressed();
-                                                }
-
-                                                inflight_mouse_events.clear();
-                                                inflight_keyboard_events.clear();
+                                                *ptr = (state.is_pressed(), *x, *y);
                                             }
 
-                                            let key_pressed = | key: winit::keyboard::KeyCode | {
-                                                let idx = key as usize;
-                                                return keyboard_events_last_frame[idx] && !keyboard_events_this_frame[idx];
-                                            };
-                                            let key_held = | key: winit::keyboard::KeyCode | {
-                                                let idx = key as usize;
-                                                return keyboard_events_last_frame[idx] && keyboard_events_this_frame[idx];
-                                            };
-                                            let mouse_pressed = | button: winit::event::MouseButton | -> (bool, u32, u32) {
-                                                let state_last_frame = match button {
-                                                    winit::event::MouseButton::Left    => mouse_events_last_frame[0],
-                                                    winit::event::MouseButton::Right   => mouse_events_last_frame[1],
-                                                    winit::event::MouseButton::Middle  => mouse_events_last_frame[2],
-                                                    winit::event::MouseButton::Back    => mouse_events_last_frame[3],
-                                                    winit::event::MouseButton::Forward => mouse_events_last_frame[4],
-                                                    _ => (false, 0, 0) ,
-                                                };
-                                                let state_this_frame = match button {
-                                                    winit::event::MouseButton::Left    => mouse_events_this_frame[0],
-                                                    winit::event::MouseButton::Right   => mouse_events_this_frame[1],
-                                                    winit::event::MouseButton::Middle  => mouse_events_this_frame[2],
-                                                    winit::event::MouseButton::Back    => mouse_events_this_frame[3],
-                                                    winit::event::MouseButton::Forward => mouse_events_this_frame[4],
-                                                    _ => (false, 0, 0) ,
-                                                };
+                                            input_ctx.keyboard_events_last_frame.copy_from_slice(&input_ctx.keyboard_events_this_frame);
+                                            for e in input_ctx.keyboard_events_this_frame.iter_mut() { *e = false; }
+                                            for (key, state) in &input_ctx.inflight_keyboard_events {
+                                                input_ctx.keyboard_events_this_frame[*key as usize] = state.is_pressed();
+                                            }
 
-                                                let dx = state_this_frame.1.abs_diff(state_last_frame.1);
-                                                let dy = state_this_frame.2.abs_diff(state_last_frame.2);
-                                                return (state_this_frame.0 && !state_this_frame.0, dx, dy);
-                                            };
-                                            let mouse_pressed = | button: winit::event::MouseButton | -> (bool, u32, u32) {
-                                                let state_last_frame = match button {
-                                                    winit::event::MouseButton::Left    => mouse_events_last_frame[0],
-                                                    winit::event::MouseButton::Right   => mouse_events_last_frame[1],
-                                                    winit::event::MouseButton::Middle  => mouse_events_last_frame[2],
-                                                    winit::event::MouseButton::Back    => mouse_events_last_frame[3],
-                                                    winit::event::MouseButton::Forward => mouse_events_last_frame[4],
-                                                    _ => (false, 0, 0) ,
-                                                };
-                                                let state_this_frame = match button {
-                                                    winit::event::MouseButton::Left    => mouse_events_this_frame[0],
-                                                    winit::event::MouseButton::Right   => mouse_events_this_frame[1],
-                                                    winit::event::MouseButton::Middle  => mouse_events_this_frame[2],
-                                                    winit::event::MouseButton::Back    => mouse_events_this_frame[3],
-                                                    winit::event::MouseButton::Forward => mouse_events_this_frame[4],
-                                                    _ => (false, 0, 0) ,
-                                                };
-
-                                                let dx = state_this_frame.1.abs_diff(state_last_frame.1);
-                                                let dy = state_this_frame.2.abs_diff(state_last_frame.2);
-                                                return (state_this_frame.0 && state_this_frame.0, dx, dy);
-                                            };
+                                            input_ctx.inflight_mouse_events.clear();
+                                            input_ctx.inflight_keyboard_events.clear();
 
 
                                             //////////////////////////////
@@ -610,20 +631,8 @@ pub fn main_thread_run_program() {
                                             let ix = (500.0 + fx*40.0) as u32;
                                             let iy = (300.0 + fy*30.0) as u32;
 
-                                            if let (true, x, y) = mouse_pressed(winit::event::MouseButton::Left) {
-                                                println!("left click at {}, {}", x, y);
-                                            }
-                                            if let (true, x, y) = mouse_pressed(winit::event::MouseButton::Right) {
-                                                println!("right click at {}, {}", x, y);
-                                            }
-
-                                            if key_pressed(winit::keyboard::KeyCode::Space) {
-                                                println!("space pressed");
-                                            }
-
-                                            if key_pressed(winit::keyboard::KeyCode::Escape) {
-                                                elwt.exit();
-                                            }
+                                            let mouse_box_x = input_ctx.mouse_x as u32;
+                                            let mouse_box_y = input_ctx.mouse_y as u32;
 
                                             let mut draw_commands = Vec::new();
                                             draw_commands.push(DrawCommand::ColoredRectangle { x: 0, x2: window_width as u32, y: 0, y2: window_height as u32, color: 0x222222 });
@@ -733,6 +742,7 @@ pub fn main_thread_run_program() {
                                             let mut _draw_command_count = 0usize;
                                             let mut _glyph_bitmap_run_allocator_position = 0usize;
                                             let mut _font_tracker_count = 0usize;
+
                                             // Do draw stuff with the good API
                                             let mut draw_ctx = unsafe { DrawCtx {
                                                 window_width: window_width as isize,
@@ -745,7 +755,10 @@ pub fn main_thread_run_program() {
                                                 font_tracker_count: (&mut _font_tracker_count) as *mut usize,
                                             }};
 
-                                            demo_of_rendering_stuff_with_context_that_allocates_in_the_background(&draw_ctx);
+                                            let should_quit = demo_of_rendering_stuff_with_context_that_allocates_in_the_background(&draw_ctx, &input_ctx);
+                                            if should_quit {
+                                                elwt.exit();
+                                            }
 
                                             // adapter
                                             draw_commands.extend(std::slice::from_raw_parts(draw_ctx.draw_command_buffer as *const DrawCommand, *draw_ctx.draw_command_count).iter());
