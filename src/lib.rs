@@ -191,6 +191,7 @@ fn draw_text_line(draw_ctx: &DrawCtx, x: isize, text_y: isize, text_height: isiz
             }
             // very important the buffers do not move ever
             let mut new_tracker = FontTracker {
+                how_many_times_was_i_used: 0,
                 target_px_height,
                 units_per_em,
                 ppem,
@@ -204,10 +205,12 @@ fn draw_text_line(draw_ctx: &DrawCtx, x: isize, text_y: isize, text_height: isiz
             };
             for _ in 0..target_px_height { new_tracker.row_buffers.push(Vec::with_capacity((max_glyph_count as usize) << glyph_row_shift)); }
             for _ in 0..max_glyph_count { new_tracker.glyph_to_bitmap_index.push(u16::MAX); }
-            copy_nonoverlapping(&new_tracker as *const FontTracker, found_font, size_of::<FontTracker>());
+            copy_nonoverlapping(&new_tracker as *const FontTracker, found_font, 1);
             std::mem::forget(new_tracker);
         }
         let tracker = &mut *found_font;
+
+        tracker.how_many_times_was_i_used += 1;
 
         let mut buf = UnicodeBuffer::new();
         buf.set_direction(rustybuzz::Direction::LeftToRight);
@@ -373,6 +376,7 @@ impl InputCtx {
 }
 
 struct FontTracker {
+    how_many_times_was_i_used: usize,
     target_px_height: usize,
     units_per_em: f32,
     ppem: f32,
@@ -506,6 +510,22 @@ pub fn main_thread_run_program() {
         mouse_x: 0,
         mouse_y: 0,
     };
+
+
+    let mut _draw_command_count = 0usize;
+    let mut _glyph_bitmap_run_allocator_position = 0usize;
+    let mut _font_tracker_count = 0usize;
+
+    let mut draw_ctx = unsafe { DrawCtx {
+        window_width: 0,
+        window_height: 0,
+        draw_command_buffer: alloc(Layout::array::<DrawCommand>(8192).unwrap()) as *mut DrawCommand,
+        draw_command_count: (&mut _draw_command_count) as *mut usize,
+        glyph_bitmap_run_allocator: alloc(Layout::array::<(u16, i16)>(8192).unwrap()) as *mut (u16, i16),
+        glyph_bitmap_run_allocator_position: (&mut _glyph_bitmap_run_allocator_position) as *mut usize,
+        font_tracker_buffer: alloc(Layout::array::<FontTracker>(8192).unwrap()) as *mut FontTracker,
+        font_tracker_count: (&mut _font_tracker_count) as *mut usize,
+    }};
 
     let mut gui_ctx = GuiCtx::new();
 
@@ -641,120 +661,30 @@ pub fn main_thread_run_program() {
                                             draw_commands.push(DrawCommand::ColoredRectangle { x: ix, x2: ix + 50, y: iy, y2: iy+40, color: 0x3357FF });
                                             draw_commands.push(DrawCommand::ColoredRectangle { x: mouse_box_x, x2: mouse_box_x.wrapping_add(100), y: mouse_box_y, y2: mouse_box_y.wrapping_add(50), color: 0xFF3366 });
 
-                                            let rb_face = RbFace::from_slice(SOURCE_SERIF, 0).expect("bad font");
-                                            let swash_font = FontRef::from_index(SOURCE_SERIF, 0).expect("font ref");
-
-                                            // DO NOT SET TARGET SIZE TO ZERO. Swash gets very flow in that case.
-                                            let target_px_height: usize = mouse_box_y.min(512).max(1) as usize;
-                                            let units_per_em: f32;
-                                            let ppem;
-                                            let glyph_row_shift: usize;
-                                            let baseline_y: usize;
-                                            let max_glyph_count;
+                                            draw_ctx.window_width = window_width as isize;
+                                            draw_ctx.window_height = window_height as isize;
+                                            *draw_ctx.draw_command_count = 0;
+                                            *draw_ctx.glyph_bitmap_run_allocator_position = 0;
+                                            // free unused fonts
                                             {
-                                                let m = swash_font.metrics(&[]);
-                                                units_per_em = m.units_per_em as f32;
-                                                ppem = target_px_height as f32 / ((m.ascent + m.descent + m.leading) / units_per_em);
-                                                glyph_row_shift = (((m.max_width / units_per_em) * ppem).ceil() as usize).next_power_of_two().trailing_zeros() as usize;
-                                                baseline_y = ((m.descent / units_per_em) * ppem).ceil() as usize;
-                                                max_glyph_count = m.glyph_count;
-                                            }
-                                            //println!("h: {} -> ppem: {} and 1 << glyph_row_shift: {} baseline_y: {}", target_px_height, ppem, 1 << glyph_row_shift, baseline_y);
-
-                                            // temp
-                                            let mut glyph_bitmap_run: Vec<(u16, i16)> = Vec::new();
-
-
-                                            let mut row_buffers: Vec<Vec<u8>> = Vec::new();
-                                            let mut cached_bitmaps_counter = 0;
-                                            let mut cached_bitmap_widths = Vec::new();
-                                            let mut glyph_to_bitmap_index = Vec::new();
-                                            for _ in 0..target_px_height { row_buffers.push(Vec::new()); }
-                                            for _ in 0..max_glyph_count { glyph_to_bitmap_index.push(u16::MAX); }
-                                            {
-                                                let text_line = "Salvē | Hello | Привет | 你好 <- No Chinese because the fonts are very big.";
-
-                                                let mut buf = UnicodeBuffer::new();
-                                                buf.set_direction(rustybuzz::Direction::LeftToRight);
-                                                buf.push_str(text_line);
-                                                buf.set_direction(rustybuzz::Direction::LeftToRight);
-
-                                                let shaped = shape(&rb_face, &[], buf);
-                                                let infos = shaped.glyph_infos();
-                                                let poss = shaped.glyph_positions();
-                                                assert_eq!(infos.len(), poss.len());
-
-                                                let mut acc_x = -50;
-                                                for text_index in 0..infos.len() {
-                                                    let g_info = &infos[text_index];
-                                                    let g_pos = &poss[text_index];
-                                                    if acc_x > window_width as i16 { break; }
-
-                                                    if glyph_to_bitmap_index[g_info.glyph_id as usize] == u16::MAX
-                                                    {
-                                                        let bitmap_index = cached_bitmaps_counter;
-                                                        cached_bitmaps_counter += 1;
-                                                        glyph_to_bitmap_index[g_info.glyph_id as usize] = bitmap_index;
-
-                                                        let px_advance = (((g_pos.x_advance as f32 / units_per_em) * ppem).ceil() as usize).min(1usize << glyph_row_shift);
-                                                        cached_bitmap_widths.push(px_advance as u16);
-
-                                                        // 3) Set up a scaler (swash) for rasterizing glyph images
-                                                        let mut _scale = ScaleContext::new();
-                                                        let mut scale = _scale.builder(swash_font).size(ppem).hint(false).build();
-
-                                                        let image = swash::scale::Render::new(&[
-                                                            swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
-                                                            swash::scale::Source::Outline,
-                                                        ])
-                                                        .format(swash::zeno::Format::Alpha)
-                                                        .render(&mut scale, g_info.glyph_id as u16).unwrap();
-                                                        assert_eq!(image.content, swash::scale::image::Content::Mask);
-
-                                                        for y in 0..target_px_height {
-                                                            let row_len = 1usize << glyph_row_shift;
-                                                            let row_put = &mut row_buffers[y];
-                                                            for x in 0..row_len {
-                                                                let cx = (x as i32 - image.placement.left) as usize;
-                                                                let cy = (y as i32 - target_px_height as i32 + image.placement.top + baseline_y as i32) as usize;
-                                                                let blend: u8;
-                                                                if (cx as u32) < image.placement.width && (cy as u32) < image.placement.height {
-                                                                    blend = image.data[image.placement.width as usize * cy + cx];
-                                                                } else {
-                                                                    blend = 0;
-                                                                }
-                                                                row_put.push(blend);
-                                                            }
-                                                            assert_eq!(row_put.len(), row_len * cached_bitmaps_counter as usize);
+                                                let mut put = 0;
+                                                for i in 0..*draw_ctx.font_tracker_count {
+                                                    let take_ptr = draw_ctx.font_tracker_buffer.add(i);
+                                                    if (*take_ptr).how_many_times_was_i_used == 0 {
+                                                        std::ptr::drop_in_place(take_ptr);
+                                                    } else {
+                                                        let put_ptr = draw_ctx.font_tracker_buffer.add(put);
+                                                        if put_ptr != take_ptr {
+                                                            std::ptr::copy_nonoverlapping(take_ptr, put_ptr, 1);
                                                         }
+                                                        (*put_ptr).how_many_times_was_i_used = 0;
+                                                        put += 1;
                                                     }
-
-                                                    glyph_bitmap_run.push((glyph_to_bitmap_index[g_info.glyph_id as usize], acc_x));
-                                                    let px_advance = (((g_pos.x_advance as f32 / units_per_em) * ppem).ceil() as usize).min(1usize << glyph_row_shift);
-                                                    acc_x += px_advance as i16;
                                                 }
-
-                                                for y in 0..target_px_height {
-                                                    let row_data = &row_buffers[y];
-                                                    draw_commands.push(DrawCommand::TextRow { y: y as u16 + 200, glyph_row_shift: glyph_row_shift as u8, color: 0xFFFFFFu32, glyph_bitmap_run: glyph_bitmap_run.as_ptr(), glyph_bitmap_run_len: glyph_bitmap_run.len(), row_bitmaps: row_data.as_ptr(), bitmap_widths: cached_bitmap_widths.as_ptr(), });
-                                                }
+                                                *draw_ctx.font_tracker_count = put;
                                             }
 
-                                            let mut _draw_command_count = 0usize;
-                                            let mut _glyph_bitmap_run_allocator_position = 0usize;
-                                            let mut _font_tracker_count = 0usize;
-
-                                            // Do draw stuff with the good API
-                                            let mut draw_ctx = unsafe { DrawCtx {
-                                                window_width: window_width as isize,
-                                                window_height: window_height as isize,
-                                                draw_command_buffer: alloc(Layout::array::<DrawCommand>(8192).unwrap()) as *mut DrawCommand,
-                                                draw_command_count: (&mut _draw_command_count) as *mut usize,
-                                                glyph_bitmap_run_allocator: alloc(Layout::array::<(u16, i16)>(8192).unwrap()) as *mut (u16, i16),
-                                                glyph_bitmap_run_allocator_position: (&mut _glyph_bitmap_run_allocator_position) as *mut usize,
-                                                font_tracker_buffer: alloc(Layout::array::<FontTracker>(8192).unwrap()) as *mut FontTracker,
-                                                font_tracker_count: (&mut _font_tracker_count) as *mut usize,
-                                            }};
+                                            draw_text_line(&draw_ctx, -10, 200, mouse_box_y as isize, "Salvē | Hello | Привет | 你好 <- No Chinese because the fonts are very big.", 0xffffff);
 
                                             gui_ctx.input = &input_ctx;
                                             gui_ctx.draw  = &draw_ctx;
