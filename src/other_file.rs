@@ -10,18 +10,9 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(gui
         return true;
     }
 
-    // draw_rectangle(draw, draw.window_width/2, draw.window_height/2, draw.window_width/2 + 100, draw.window_height/2 + 100, 0x0);
-
-    // let first_text = "This text is to the left.";
-    // let second_text = "This text is to the right.";
-    // let offset = draw_measure_text_line(draw, 16, first_text);
-    // draw_text_line(draw, draw.window_width/2 + offset, draw.window_height/2, 16, first_text, 0xff0000);
-    // draw_text_line(draw, draw.window_width/2, draw.window_height/2, 16, first_text, 0xff);
-    let first_text = "This text is to the left.";
-    let second_text = "This text is to the right.";
-    let offset = draw_measure_text_line(gui.draw(), 16, first_text);
-    draw_text_line(gui.draw(), gui.draw().window_width/2 + offset, gui.draw().window_height/2, 16, second_text, 0xff0000);
-    draw_text_line(gui.draw(), gui.draw().window_width/2, gui.draw().window_height/2, 16, first_text, 0xff);
+    if gui.button("Say Hello", 10, 48, 32) {
+        println!("hello!");
+    }
 
     return false;
 }
@@ -69,8 +60,7 @@ impl GuiCtx {
     pub fn button(&mut self, label: &str, x: isize, y: isize, height: isize) -> bool {
         let element_id = self.unique_id(std::panic::Location::caller(), Some(label));
         let Some(el) = self.elements.get_mut(&element_id).map(magic) else {
-            // let width = draw_measure_text_line(self.draw(), height, label);
-            let width = 100;
+            let width = draw_measure_text_line(self.draw(), height, label);
             self.elements.insert(element_id, GuiElement {
                 label:  label.to_string(),
                 bounds: (x, y, x + width, y + height),
@@ -101,9 +91,9 @@ impl GuiCtx {
         }
         draw_rectangle(self.draw(), el.bounds.0, el.bounds.1, el.bounds.2, el.bounds.3, color);
 
-        let center_x = el.bounds.0 + el.bounds.2 / 2;
-        let center_y = el.bounds.1 + el.bounds.3 / 2;
-        draw_text_line(self.draw(), center_x, center_y, height, &el.label, 0x000000);
+        // let center_x = el.bounds.0 + el.bounds.2 / 2;
+        // let center_y = el.bounds.1 + el.bounds.3 / 2;
+        draw_text_line(self.draw(), el.bounds.0, el.bounds.1, height, &el.label, 0x000000);
 
         return clicked;
     }
