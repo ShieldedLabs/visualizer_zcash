@@ -146,15 +146,19 @@ impl GuiCtx {
     }
 
     pub fn end_frame(&mut self) {
-        if let Some((tt_id, el_id)) = self.deferred_tooltip && self.deferred_tooltip_wait >= 0.5 {
+        if let Some((tt_id, el_id)) = self.deferred_tooltip  {
             let el = self.elements.get(&el_id).unwrap();
             let tt = self.elements.get(&tt_id).unwrap();
-            if el.active || el.point_within_bounds(self.input().mouse_x, self.input().mouse_y) {
-                let x = self.deferred_tooltip_pos.0;
-                let y = self.deferred_tooltip_pos.1;
 
-                draw_rectangle(self.draw(), x, y, x + tt.bounds.width(), y + tt.label_height, 0x00_00_00_00);
-                draw_text_line(self.draw(), x, y, tt.label_height, &tt.label, 0xFFFFFF);
+            self.deferred_tooltip_wait += self.delta;
+            if el.active || el.point_within_bounds(self.input().mouse_x, self.input().mouse_y) {
+                if self.deferred_tooltip_wait >= 0.5 {
+                    let x = self.deferred_tooltip_pos.0;
+                    let y = self.deferred_tooltip_pos.1;
+
+                    draw_rectangle(self.draw(), x, y, x + tt.bounds.width(), y + tt.label_height, 0x00_00_00_00);
+                    draw_text_line(self.draw(), x, y, tt.label_height, &tt.label, 0xFFFFFF);
+                }
             }
             else {
                 self.deferred_tooltip      = None;
@@ -222,16 +226,13 @@ impl GuiCtx {
     }
 
     fn maybe_show_tooltip_for(&mut self, el: &GuiElement) {
-        if el.active {
-            self.deferred_tooltip_wait += self.delta;
-            if let Some(id) = self.tooltip_stack.pop() {
-                if self.deferred_tooltip.is_some() {
-                    return;
-                }
-
-                self.deferred_tooltip     = Some((id, el.id));
-                self.deferred_tooltip_pos = (el.bounds.x1 + el.bounds.width() / 2, el.bounds.y1 + el.bounds.height());
+        if el.active && let Some(id) = self.tooltip_stack.pop() {
+            if self.deferred_tooltip.is_some() {
+                return;
             }
+
+            self.deferred_tooltip     = Some((id, el.id));
+            self.deferred_tooltip_pos = (el.bounds.x1 + el.bounds.width() / 2, el.bounds.y1 + el.bounds.height());
         }
     }
 
