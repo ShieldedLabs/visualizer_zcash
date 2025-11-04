@@ -159,7 +159,7 @@ fn draw_text_line(draw_ctx: &DrawCtx, x: isize, text_y: isize, text_height: isiz
         if text_height <= 0 { return; }
 
         let mut found_font = std::ptr::null_mut();
-        for i in 0..*draw_ctx.draw_command_count {
+        for i in 0..*draw_ctx.font_tracker_count {
             let check = draw_ctx.font_tracker_buffer.add(i);
             if (*check).target_px_height == text_height as usize {
                 found_font = check;
