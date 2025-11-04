@@ -366,9 +366,9 @@ impl InputCtx {
             _ => (false, 0, 0) ,
         };
 
-        let dx = state_this_frame.1.abs_diff(state_last_frame.1) as isize;
-        let dy = state_this_frame.2.abs_diff(state_last_frame.2) as isize;
-        return (state_this_frame.0 && !state_this_frame.0, dx, dy);
+        let dx = state_this_frame.1 - state_last_frame.1;
+        let dy = state_this_frame.2 - state_last_frame.2;
+        return (!state_last_frame.0 && state_this_frame.0, dx, dy);
     }
 
     fn mouse_held(&self, button: winit::event::MouseButton) -> (bool, isize, isize) {
@@ -389,9 +389,9 @@ impl InputCtx {
             _ => (false, 0, 0) ,
         };
 
-        let dx = state_this_frame.1.abs_diff(state_last_frame.1) as isize;
-        let dy = state_this_frame.2.abs_diff(state_last_frame.2) as isize;
-        return (state_this_frame.0 && state_this_frame.0, dx, dy);
+        let dx = state_this_frame.1 - state_last_frame.1;
+        let dy = state_this_frame.2 - state_last_frame.2;
+        return (state_last_frame.0 && state_this_frame.0, dx, dy);
     }
 }
 
@@ -412,6 +412,7 @@ struct FontTracker {
 struct DrawCtx {
     window_width: isize,
     window_height: isize,
+    window_resized: bool,
     draw_command_buffer: *mut DrawCommand,
     draw_command_count: *mut usize,
     glyph_bitmap_run_allocator: *mut (u16, i16),
@@ -545,7 +546,6 @@ pub fn main_thread_run_program() {
         mouse_y: 0,
     };
 
-
     let mut _draw_command_count = 0usize;
     let mut _glyph_bitmap_run_allocator_position = 0usize;
     let mut _font_tracker_count = 0usize;
@@ -553,6 +553,7 @@ pub fn main_thread_run_program() {
     let mut draw_ctx = unsafe { DrawCtx {
         window_width: 0,
         window_height: 0,
+        window_resized: true,
         draw_command_buffer: alloc(Layout::array::<DrawCommand>(8192).unwrap()) as *mut DrawCommand,
         draw_command_count: (&mut _draw_command_count) as *mut usize,
         glyph_bitmap_run_allocator: alloc(Layout::array::<(u16, i16)>(8192).unwrap()) as *mut (u16, i16),
@@ -612,6 +613,9 @@ pub fn main_thread_run_program() {
                                         _ => {},
                                     }
                                 },
+                                winit::event::WindowEvent::Resized(size) => {
+                                    draw_ctx.window_resized = true;
+                                }
                                 winit::event::WindowEvent::RedrawRequested => {
                                     if frame_is_actually_queued_by_us || okay_but_is_it_wayland(elwt) {
                                         unsafe {
@@ -652,7 +656,11 @@ pub fn main_thread_run_program() {
                                             // INPUT
                                             //////////////////////////////
                                             input_ctx.mouse_events_last_frame.copy_from_slice(&input_ctx.mouse_events_this_frame);
-                                            for e in input_ctx.mouse_events_this_frame.iter_mut() { *e = (false, 0, 0); }
+                                            if !input_ctx.should_process_mouse_events {
+                                                // if we lost focus, clear mouse events so we don't accidentally persist events
+                                                for e in &mut input_ctx.mouse_events_this_frame
+                                                 { *e = (false, 0, 0); }
+                                            }
                                             for (button, state, x, y) in &input_ctx.inflight_mouse_events {
                                                 let ptr = match button {
                                                     winit::event::MouseButton::Left    => &mut input_ctx.mouse_events_this_frame[0],
@@ -667,7 +675,8 @@ pub fn main_thread_run_program() {
                                             }
 
                                             input_ctx.keyboard_events_last_frame.copy_from_slice(&input_ctx.keyboard_events_this_frame);
-                                            for e in input_ctx.keyboard_events_this_frame.iter_mut() { *e = false; }
+                                            for e in &mut input_ctx.keyboard_events_this_frame
+                                             { *e = false; }
                                             for (key, state) in &input_ctx.inflight_keyboard_events {
                                                 input_ctx.keyboard_events_this_frame[*key as usize] = state.is_pressed();
                                             }
@@ -732,6 +741,9 @@ pub fn main_thread_run_program() {
                                                 }
                                             }
                                             gui_ctx.end_frame();
+
+                                            if draw_ctx.window_resized
+                                             { draw_ctx.window_resized = false; }
 
                                             // adapter
                                             draw_commands.extend(std::slice::from_raw_parts(draw_ctx.draw_command_buffer as *const DrawCommand, *draw_ctx.draw_command_count).iter());
