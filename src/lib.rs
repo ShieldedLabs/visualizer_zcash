@@ -1130,7 +1130,8 @@ pub fn main_thread_run_program() {
                                                     let display_buffer = (*p_thread_context).display_buffer;
 
                                                     let end_frame_blit_range_start = (*p_thread_context).end_frame_blit_range_start;
-                                                    let end_frame_blit_range_end = (*p_thread_context).end_frame_blit_range_end.max(end_frame_blit_range_start);
+                                                    let end_frame_blit_range_end = (*p_thread_context).end_frame_blit_range_end;
+                                                    if end_frame_blit_range_end <= end_frame_blit_range_start { return; }
                                                     let row_count = end_frame_blit_range_end - end_frame_blit_range_start;
 
                                                     let render_target_stride = (*p_thread_context).render_target_stride;
