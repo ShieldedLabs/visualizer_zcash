@@ -292,8 +292,7 @@ impl DrawCtx {
         }
     }
 
-    pub fn set_scissor(&self, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
-        todo!("sam ;)");
+    pub fn set_scissor(&self, x1: isize, y1: isize, x2: isize, y2: isize) {
     }
 
     pub fn rectangle(&self, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {

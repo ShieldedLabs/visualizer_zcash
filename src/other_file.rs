@@ -139,8 +139,9 @@ impl GuiCtx {
                     if y + tt.label_height > self.draw().window_height
                      { y = self.draw().window_height - tt.label_height; }
 
-                    self.draw().rectangle(x, y, x + tt.rect.width(), y + tt.label_height, 0x00_00_00_00);
-                    self.draw().text_line(x, y, tt.label_height, &tt.label, 0xFFFFFF);
+                    self.draw().set_scissor(x, y, x + tt.rect.width(), y + tt.label_height);
+                    self.draw().rectangle(x, y, x + tt.rect.width(), y + tt.label_height, self.style.background.dim(0.5).into());
+                    self.draw().text_line(x, y, tt.label_height, &tt.label, self.style.foreground.into());
                 }
             }
             else {
@@ -176,9 +177,8 @@ impl GuiCtx {
         let element_id = self.unique_id(std::panic::Location::caller(), Some(label));
         let Some(el) = self.elements.get_mut(&element_id).map(magic) else {
             self.elements.insert(element_id, GuiElement {
-                id:    element_id,
-                flags: flags,
-
+                id:           element_id,
+                flags:        flags,
                 label:        label.to_string(),
                 label_height: height,
 
@@ -205,6 +205,7 @@ impl GuiCtx {
         }
 
         if !el.flags.hidden {
+            self.draw().set_scissor(el.rect.x1, el.rect.y1, el.rect.x2, el.rect.y2);
             self.draw().rectangle(el.rect.x1, el.rect.y1, el.rect.x2, el.rect.y2, bg.into());
             self.draw().text_line(el.rect.x1, el.rect.y1, height, &el.label, fg.into());
         }
