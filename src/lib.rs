@@ -6,7 +6,7 @@ const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 0;
 
 use std::{alloc::{alloc, dealloc, Layout}, hash::Hasher, hint::spin_loop, mem::{transmute, MaybeUninit}, ptr::{copy_nonoverlapping, slice_from_raw_parts}, rc::Rc, sync::{atomic::{AtomicU32, Ordering}, Barrier}, time::{Duration, Instant}};
 use twox_hash::xxhash3_64;
-use winit::dpi::Size;
+use winit::{dpi::Size, keyboard::KeyCode};
 
 use rustybuzz::{shape, Face as RbFace, UnicodeBuffer};
 use swash::{scale::ScaleContext, FontRef};
@@ -331,6 +331,7 @@ impl DrawCtx {
 
 #[derive(Debug)]
 struct InputCtx {
+    mouse_moved: bool,
     should_process_mouse_events: bool,
     inflight_mouse_events:       Vec::<(winit::event::MouseButton, winit::event::ElementState, isize, isize)>,
     inflight_keyboard_events:    Vec::<(winit::keyboard::KeyCode, winit::event::ElementState)>,
@@ -558,6 +559,7 @@ pub fn main_thread_run_program() {
     let mut whole_screen_hash = 0u64;
 
     let mut input_ctx = InputCtx {
+        mouse_moved: false,
         should_process_mouse_events: true,
         inflight_mouse_events: Vec::new(),
         inflight_keyboard_events: Vec::new(),
@@ -624,6 +626,7 @@ pub fn main_thread_run_program() {
                                 winit::event::WindowEvent::CursorMoved { device_id, position } => {
                                     input_ctx.mouse_x = position.x as isize;
                                     input_ctx.mouse_y = position.y as isize;
+                                    input_ctx.mouse_moved = true;
                                 },
                                 winit::event::WindowEvent::MouseInput { device_id, state, button } => {
                                     if input_ctx.should_process_mouse_events {
@@ -645,6 +648,55 @@ pub fn main_thread_run_program() {
                                 winit::event::WindowEvent::RedrawRequested => {
                                     if frame_is_actually_queued_by_us || okay_but_is_it_wayland(elwt) {
                                         unsafe {
+                                            let mut is_anything_happening_at_all_in_any_way = false;
+
+                                            is_anything_happening_at_all_in_any_way |= gui_ctx.debug;
+                                            is_anything_happening_at_all_in_any_way |= draw_ctx.window_resized;
+                                            is_anything_happening_at_all_in_any_way |= input_ctx.mouse_moved;
+
+                                            input_ctx.mouse_events_last_frame.copy_from_slice(&input_ctx.mouse_events_this_frame);
+                                            if !input_ctx.should_process_mouse_events {
+                                                // if we lost focus, clear mouse events so we don't accidentally persist events
+                                                for e in &mut input_ctx.mouse_events_this_frame
+                                                { *e = (false, 0, 0); }
+                                            }
+                                            for (button, state, x, y) in &input_ctx.inflight_mouse_events {
+                                                let ptr = match button {
+                                                    winit::event::MouseButton::Left    => &mut input_ctx.mouse_events_this_frame[0],
+                                                    winit::event::MouseButton::Right   => &mut input_ctx.mouse_events_this_frame[1],
+                                                    winit::event::MouseButton::Middle  => &mut input_ctx.mouse_events_this_frame[2],
+                                                    winit::event::MouseButton::Back    => &mut input_ctx.mouse_events_this_frame[3],
+                                                    winit::event::MouseButton::Forward => &mut input_ctx.mouse_events_this_frame[4],
+                                                    _ => { continue; },
+                                                };
+                                                
+                                                *ptr = (state.is_pressed(), *x, *y);
+                                                is_anything_happening_at_all_in_any_way = true;
+                                            }
+
+                                            input_ctx.keyboard_events_last_frame.copy_from_slice(&input_ctx.keyboard_events_this_frame);
+                                            for e in &mut input_ctx.keyboard_events_this_frame
+                                             { *e = false; }
+                                            for (key, state) in &input_ctx.inflight_keyboard_events {
+                                                input_ctx.keyboard_events_this_frame[*key as usize] = state.is_pressed();
+                                            }
+
+                                            input_ctx.inflight_mouse_events.clear();
+                                            input_ctx.inflight_keyboard_events.clear();
+
+                                            is_anything_happening_at_all_in_any_way |= input_ctx.keyboard_events_this_frame != input_ctx.keyboard_events_last_frame;
+
+                                            // TODO: Poll Business for spontanious events. E.g. animations are still playing. Or, we recieved new blocks to display et cetera.
+
+                                            if is_anything_happening_at_all_in_any_way == false {
+                                                last_call_to_present_instant = Instant::now();
+                                                frame_is_actually_queued_by_us = false;
+                                                if okay_but_is_it_wayland(elwt) {
+                                                    wayland_dropped_a_frame_on_purpose_counter = 2;
+                                                }
+                                                return;
+                                            }
+
                                             // Tell workers: WAKE UP WAKE UP WAKE UP!!!
                                             while (*p_thread_context).workers_that_have_passed_the_wake_up_gate.load(Ordering::Relaxed) != (*p_thread_context).thread_count - 1 { spin_loop(); }
                                             (*p_thread_context).workers_that_have_passed_the_wake_up_gate.store(0, Ordering::Relaxed);
@@ -678,43 +730,6 @@ pub fn main_thread_run_program() {
                                                 saved_tile_hashes = vec![0u64; tiles_wide*tiles_wide];
                                             }
 
-
-                                            //////////////////////////////
-                                            // INPUT
-                                            //////////////////////////////
-                                            input_ctx.mouse_events_last_frame.copy_from_slice(&input_ctx.mouse_events_this_frame);
-                                            if !input_ctx.should_process_mouse_events {
-                                                // if we lost focus, clear mouse events so we don't accidentally persist events
-                                                for e in &mut input_ctx.mouse_events_this_frame
-                                                 { *e = (false, 0, 0); }
-                                            }
-                                            for (button, state, x, y) in &input_ctx.inflight_mouse_events {
-                                                let ptr = match button {
-                                                    winit::event::MouseButton::Left    => &mut input_ctx.mouse_events_this_frame[0],
-                                                    winit::event::MouseButton::Right   => &mut input_ctx.mouse_events_this_frame[1],
-                                                    winit::event::MouseButton::Middle  => &mut input_ctx.mouse_events_this_frame[2],
-                                                    winit::event::MouseButton::Back    => &mut input_ctx.mouse_events_this_frame[3],
-                                                    winit::event::MouseButton::Forward => &mut input_ctx.mouse_events_this_frame[4],
-                                                    _ => { continue; },
-                                                };
-
-                                                *ptr = (state.is_pressed(), *x, *y);
-                                            }
-
-                                            input_ctx.keyboard_events_last_frame.copy_from_slice(&input_ctx.keyboard_events_this_frame);
-                                            for e in &mut input_ctx.keyboard_events_this_frame
-                                             { *e = false; }
-                                            for (key, state) in &input_ctx.inflight_keyboard_events {
-                                                input_ctx.keyboard_events_this_frame[*key as usize] = state.is_pressed();
-                                            }
-
-                                            input_ctx.inflight_mouse_events.clear();
-                                            input_ctx.inflight_keyboard_events.clear();
-
-
-                                            //////////////////////////////
-                                            // UPDATE
-                                            //////////////////////////////
                                             let dt = 1000.0 / (frame_interval_milli_hertz as f64);
 
                                             t += dt;
@@ -769,8 +784,8 @@ pub fn main_thread_run_program() {
                                             }
                                             gui_ctx.end_frame();
 
-                                            if draw_ctx.window_resized
-                                            { draw_ctx.window_resized = false; }
+                                            draw_ctx.window_resized = false;
+                                            input_ctx.mouse_moved = false;
 
                                             // adapter
                                             draw_commands.extend(std::slice::from_raw_parts(draw_ctx.draw_command_buffer as *const DrawCommand, *draw_ctx.draw_command_count).iter());
@@ -1273,34 +1288,24 @@ pub fn main_thread_run_program() {
                                     elwt.set_control_flow(winit::event_loop::ControlFlow::Wait);
                                 }
                             } else {
-                                loop {
-                                    let now = Instant::now();
-                                    if now >= next_frame_deadline {
-                                        if last_call_to_present_instant > next_frame_deadline {
-                                        } else {
-                                            frame_is_actually_queued_by_us = true;
-                                            window.request_redraw();
-                                        }
-                                        if now - next_frame_deadline > Duration::from_millis(250) {
-                                            next_frame_deadline = Instant::now() + Duration::from_secs(1000) / frame_interval_milli_hertz;
-                                        } else {
-                                            while now >= next_frame_deadline {
-                                                next_frame_deadline += Duration::from_secs(1000) / frame_interval_milli_hertz;
-                                            }
-                                        }
+                                let now = Instant::now();
+                                if now >= next_frame_deadline {
+                                    if last_call_to_present_instant > next_frame_deadline {
                                     } else {
-                                        if cfg!(target_os = "macos") {
-                                            std::thread::sleep(next_frame_deadline.saturating_duration_since(Instant::now()));
-                                            continue;
+                                        frame_is_actually_queued_by_us = true;
+                                        window.request_redraw();
+                                    }
+                                    if now - next_frame_deadline > Duration::from_millis(250) {
+                                        next_frame_deadline = Instant::now() + Duration::from_secs(1000) / frame_interval_milli_hertz;
+                                    } else {
+                                        while now >= next_frame_deadline {
+                                            next_frame_deadline += Duration::from_secs(1000) / frame_interval_milli_hertz;
                                         }
                                     }
-                                    if cfg!(target_os = "macos") {
-                                        elwt.set_control_flow(winit::event_loop::ControlFlow::Poll);
-                                    } else {
-                                        elwt.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_frame_deadline));
-                                    }
-                                    break;
+                                } else {
+                                    std::thread::sleep(next_frame_deadline.saturating_duration_since(now));
                                 }
+                                elwt.set_control_flow(winit::event_loop::ControlFlow::Poll);
                             }
                         },
                         _ => (),
