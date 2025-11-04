@@ -1211,6 +1211,7 @@ pub fn main_thread_run_program() {
                                                                     put_data = put_data.byte_add((0 - x1) as usize * 4);
                                                                     x1 = 0;
                                                                 }
+                                                                if x1 >= x2 { continue; }
                                                                 let len = x2 - x1;
                                                                 debug_assert!(len != 0);
                                                                 for _ in 0..len {
