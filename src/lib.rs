@@ -154,7 +154,7 @@ fn draw_measure_text_line(draw_ctx: &DrawCtx, text_height: isize, text_line: &st
     }).reduce(|acc, a| acc + a).unwrap() as isize
 }
 
-fn draw_text_line(draw_ctx: &DrawCtx, x: isize, text_y: isize, text_height: isize, text_line: &str, color: u32) {
+fn draw_text_line(draw_ctx: &DrawCtx, text_x: isize, text_y: isize, text_height: isize, text_line: &str, color: u32) {
     unsafe {
         if text_height <= 0 { return; }
 
@@ -225,7 +225,7 @@ fn draw_text_line(draw_ctx: &DrawCtx, x: isize, text_y: isize, text_height: isiz
         let glyph_bitmap_run_start = draw_ctx.glyph_bitmap_run_allocator.add(*draw_ctx.glyph_bitmap_run_allocator_position);
         let mut glyph_bitmap_run_count = 0usize;
 
-        let mut acc_x = x;
+        let mut acc_x = text_x;
         for text_index in 0..infos.len() {
             let g_info = &infos[text_index];
             let g_pos = &poss[text_index];
@@ -528,6 +528,7 @@ pub fn main_thread_run_program() {
     }};
 
     let mut gui_ctx = GuiCtx::new();
+    gui_ctx.style   = GuiStyle::dark();
 
     let mut t: f64 = 0.0;
 
@@ -658,8 +659,8 @@ pub fn main_thread_run_program() {
 
                                             let mut draw_commands = Vec::new();
                                             draw_commands.push(DrawCommand::ColoredRectangle { x: 0, x2: window_width as u32, y: 0, y2: window_height as u32, color: 0x222222 });
-                                            draw_commands.push(DrawCommand::ColoredRectangle { x: ix, x2: ix + 50, y: iy, y2: iy+40, color: 0x3357FF });
-                                            draw_commands.push(DrawCommand::ColoredRectangle { x: mouse_box_x, x2: mouse_box_x.wrapping_add(100), y: mouse_box_y, y2: mouse_box_y.wrapping_add(50), color: 0xFF3366 });
+                                            // draw_commands.push(DrawCommand::ColoredRectangle { x: ix, x2: ix + 50, y: iy, y2: iy+40, color: 0x3357FF });
+                                            // draw_commands.push(DrawCommand::ColoredRectangle { x: mouse_box_x, x2: mouse_box_x.wrapping_add(100), y: mouse_box_y, y2: mouse_box_y.wrapping_add(50), color: 0xFF3366 });
 
                                             draw_ctx.window_width = window_width as isize;
                                             draw_ctx.window_height = window_height as isize;
@@ -686,12 +687,17 @@ pub fn main_thread_run_program() {
 
                                             draw_text_line(&draw_ctx, -10, 200, mouse_box_y as isize, "Salvē | Hello | Привет | 你好 <- No Chinese because the fonts are very big.", 0xffffff);
 
+                                            gui_ctx.delta = dt;
                                             gui_ctx.input = &input_ctx;
                                             gui_ctx.draw  = &draw_ctx;
-                                            let should_quit = demo_of_rendering_stuff_with_context_that_allocates_in_the_background(&mut gui_ctx);
-                                            if should_quit {
-                                                elwt.exit();
+                                            gui_ctx.begin_frame();
+                                            {
+                                                let should_quit = demo_of_rendering_stuff_with_context_that_allocates_in_the_background(&mut gui_ctx);
+                                                if should_quit {
+                                                    elwt.exit();
+                                                }
                                             }
+                                            gui_ctx.end_frame();
 
                                             // adapter
                                             draw_commands.extend(std::slice::from_raw_parts(draw_ctx.draw_command_buffer as *const DrawCommand, *draw_ctx.draw_command_count).iter());
