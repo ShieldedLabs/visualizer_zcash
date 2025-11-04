@@ -158,6 +158,7 @@ impl DrawCtx {
     pub fn text_line(&self, text_x: isize, text_y: isize, text_height: isize, text_line: &str, color: u32) {
         unsafe {
             if text_height <= 0 { return; }
+            let text_height = text_height.min(4096);
 
             let mut found_font = std::ptr::null_mut();
             for i in 0..*self.font_tracker_count {
@@ -470,11 +471,13 @@ enum DrawCommand {
 }
 
 struct FrameStat {
-    work_time_us: u64,
-    full_time_us: u64,
+    single_threaded_time_us: usize,
+    work_time_us: usize,
+    full_time_us: usize,
 }
 impl FrameStat {
     const _0: FrameStat = FrameStat {
+        single_threaded_time_us: 0,
         work_time_us: 0,
         full_time_us: 0,
     };
@@ -515,9 +518,10 @@ pub fn main_thread_run_program() {
     let mut frame_stat_o = 0;
     let mut frame_interval_milli_hertz = 60000;
     let mut next_frame_deadline = Instant::now() + Duration::from_secs(1000) / frame_interval_milli_hertz;
-    let mut prev_frame_time_us = 0u64;
-    let mut prev_frame_time_total_us = 0u64;
-    let mut prev_frame_time_total_us_max_5_seconds = 0u64;
+    let mut prev_frame_time_single_threaded_us = 0usize;
+    let mut prev_frame_time_us = 0usize;
+    let mut prev_frame_time_total_us = 0usize;
+    let mut prev_frame_time_total_us_max_5_seconds = 0usize;
     let mut prev_frame_time_total_us_max_5_seconds_last_reset = Instant::now();
     let mut last_call_to_present_instant = Instant::now();
     let mut frame_is_actually_queued_by_us = false;
@@ -650,6 +654,7 @@ pub fn main_thread_run_program() {
                                             (*p_thread_context).begin_work_gate.store(0, Ordering::Relaxed);
                                             (*p_thread_context).wake_up_gate.store(1, Ordering::Release);
 
+                                            let target_frame_time_us = (1000000000.0 / (frame_interval_milli_hertz as f64)) as usize;
                                             let begin_frame_instant = Instant::now();
 
                                             let (window_width, window_height) = {
@@ -767,38 +772,12 @@ pub fn main_thread_run_program() {
                                             if draw_ctx.window_resized
                                             { draw_ctx.window_resized = false; }
 
-                                            let target_time_us = (1000000000.0 / (frame_interval_milli_hertz as f64)) as u64;
-                                            prev_frame_time_total_us_max_5_seconds = prev_frame_time_total_us_max_5_seconds.max(prev_frame_time_total_us);
-                                            draw_ctx.text_line(8, 8, 16, &format!("Rate: {} hz | (us) deadline: {} internal:{:>5} total:{:>5} max(5s):{:>5}", frame_interval_milli_hertz as f32 / 1000.0, target_time_us, prev_frame_time_us, prev_frame_time_total_us, prev_frame_time_total_us_max_5_seconds), if prev_frame_time_total_us < target_time_us { 0x00ff00 } else { 0xff5500 });
-                                            if prev_frame_time_total_us_max_5_seconds_last_reset.elapsed().as_secs() >= 5 {
-                                                prev_frame_time_total_us_max_5_seconds = 0;
-                                                prev_frame_time_total_us_max_5_seconds_last_reset = Instant::now();
-                                            }
-
                                             // adapter
                                             draw_commands.extend(std::slice::from_raw_parts(draw_ctx.draw_command_buffer as *const DrawCommand, *draw_ctx.draw_command_count).iter());
 
                                             draw_commands.push(DrawCommand::PixelLineXDef { x1: 50, y1: 500, x2: mouse_box_x as u16, y2: mouse_box_y as u16, color: 0xffbb00 });
 
-                                            if gui_ctx.debug {
-                                                let expected_frame_us = (dt * 1000.0 * 1000.0) as u64;
-                                                let x1 = 0;
-                                                let thick = 2;
-
-                                                for (i, stat) in frame_stats.iter().enumerate() {
-                                                    let y = 40 + thick*i as u16;
-                                                    let full_w = stat.full_time_us * 40 / expected_frame_us;
-                                                    let work_w = stat.work_time_us * 40 / expected_frame_us;
-                                                    let full_color = if stat.full_time_us < expected_frame_us { 0x1133ff } else { 0x991111 };
-                                                    let work_color = if stat.work_time_us < expected_frame_us { 0x2266ee } else { 0xee2222 };
-                                                    for t in 0..thick {
-                                                        draw_commands.push(DrawCommand::PixelLineXDef { x1, y1: y+t, x2: x1 + full_w as u16, y2: y+t, color: full_color });
-                                                    }
-                                                    for t in 0..thick {
-                                                        draw_commands.push(DrawCommand::PixelLineXDef { x1, y1: y+t, x2: x1 + work_w as u16, y2: y+t, color: work_color });
-                                                    }
-                                                }
-                                            }
+                                            prev_frame_time_single_threaded_us = begin_frame_instant.elapsed().as_micros() as usize;
 
                                             #[derive(Clone, Copy)]
                                             struct ExecuteCommandBufferOnTilesCtx {
@@ -1101,8 +1080,7 @@ pub fn main_thread_run_program() {
                                                 whole_screen_hash = new_hash;
                                             }
 
-                                            prev_frame_time_us = begin_frame_instant.elapsed().as_micros() as u64;
-                                            frame_stats[frame_stat_o % frame_stats.len()].work_time_us = prev_frame_time_us;
+                                            prev_frame_time_us = begin_frame_instant.elapsed().as_micros() as usize;
 
                                             struct EndOfFrameBlitCtx {
                                                 render_target_0: *mut u8,
@@ -1118,6 +1096,7 @@ pub fn main_thread_run_program() {
                                                 render_target_stride: draw_area_pixel_wide,
                                                 display_buffer_stride: window_width,
                                             };
+                                            // Note(Sam): We need to call dennis_parallel_for with is_last_time true in order for the threads to go to sleep. Therefore if we don't want to do work we pass work_count=0.
                                             dennis_parallel_for(p_thread_context, true, (need_buffer_flip as usize)*((window_height + 32 - 1) / 32), &ups as *const EndOfFrameBlitCtx as usize,
                                             |thread_id: usize, work_id: usize, work_count: usize, user_pointer: usize| {
                                                 unsafe {
@@ -1142,12 +1121,117 @@ pub fn main_thread_run_program() {
                                                 }
                                             });
 
-                                            prev_frame_time_total_us = begin_frame_instant.elapsed().as_micros() as u64;
-                                            let frame_pace_us = last_call_to_present_instant.elapsed().as_micros() as u64;
-                                            last_call_to_present_instant = Instant::now();
-                                            frame_stats[frame_stat_o % frame_stats.len()].full_time_us = frame_pace_us;
+                                            prev_frame_time_total_us = begin_frame_instant.elapsed().as_micros() as usize;
+                                            frame_stats[frame_stat_o % frame_stats.len()].single_threaded_time_us = prev_frame_time_single_threaded_us as usize;
+                                            frame_stats[frame_stat_o % frame_stats.len()].work_time_us = prev_frame_time_us as usize;
+                                            frame_stats[frame_stat_o % frame_stats.len()].full_time_us = prev_frame_time_total_us as usize;
                                             frame_stat_o += 1;
 
+                                            prev_frame_time_total_us_max_5_seconds = prev_frame_time_total_us_max_5_seconds.max(prev_frame_time_total_us);
+                                            
+                                            if gui_ctx.debug {
+                                                let begin_draw_commands = *draw_ctx.draw_command_count;
+                                                draw_ctx.text_line(8, 8, 16,
+                                                    &format!(
+                                                        "Rate: {} hz | (us) deadline: {} internal:{:>5} total:{:>5} max(5s):{:>5}",
+                                                        frame_interval_milli_hertz as f32 / 1000.0,
+                                                        target_frame_time_us,
+                                                        prev_frame_time_us,
+                                                        prev_frame_time_total_us,
+                                                        prev_frame_time_total_us_max_5_seconds
+                                                    ), 
+                                                    if prev_frame_time_total_us < target_frame_time_us { 0x00ff00 } else { 0xff5500 },
+                                                );
+                                                let end_draw_commands = *draw_ctx.draw_command_count;
+                                                *draw_ctx.draw_command_count = begin_draw_commands;
+
+                                                // Force a non measured render buffer reset if the real code is not active to save CPU.
+                                                if need_buffer_flip == false
+                                                {
+                                                    for row in 0..window_height {
+                                                        let pixel_src = render_target_0.byte_add(row*draw_area_pixel_wide*4) as *mut u8;
+                                                        let pixel_dst = final_output_blit_buffer.byte_add(row*window_width*4) as *mut u8;
+                                                        copy_nonoverlapping(pixel_src, pixel_dst, window_width*4);
+                                                    }
+                                                }
+
+                                                // draw those commands *manually* that are in the unallocated space of the buffer
+                                                for cmd_i in begin_draw_commands..end_draw_commands {
+                                                    match *draw_ctx.draw_command_buffer.add(cmd_i) {
+                                                        DrawCommand::TextRow { y, glyph_row_shift, color, font_tracker_id, font_row_index, glyph_bitmap_run, glyph_bitmap_run_len } => {
+                                                            let font_tracker = &*draw_ctx.font_tracker_buffer.add(font_tracker_id as usize);
+                                                            let bitmap_widths = font_tracker.cached_bitmap_widths.as_ptr();
+                                                            let row_bitmaps = font_tracker.row_buffers[font_row_index as usize].as_ptr();
+
+                                                            for i in 0..glyph_bitmap_run_len {
+                                                                let (lookup_index, start_x) = *glyph_bitmap_run.add(i);
+                                                                let width = *bitmap_widths.add(lookup_index as usize) as usize;
+
+                                                                let mut copy_data = row_bitmaps.byte_add((lookup_index as usize) << glyph_row_shift);
+                                                                let mut put_data = final_output_blit_buffer.byte_add(y as usize *window_width*4).byte_offset(start_x as isize *4);
+
+                                                                let mut x1 = start_x as isize;
+                                                                let x2 = (start_x as isize + width as isize).min(window_width as isize);
+                                                                if x1 < 0 {
+                                                                    copy_data = copy_data.byte_add((0 - x1) as usize);
+                                                                    put_data = put_data.byte_add((0 - x1) as usize * 4);
+                                                                    x1 = 0;
+                                                                }
+                                                                let len = x2 - x1;
+                                                                debug_assert!(len != 0);
+                                                                for _ in 0..len {
+                                                                    let blend = *copy_data as u32;
+                                                                    copy_data = copy_data.byte_add(1);
+                                                                    *(put_data as *mut u32) = blend_u32(*(put_data as *mut u32), color, blend);
+                                                                    put_data = put_data.byte_add(4);
+                                                                }
+                                                            }
+                                                        },
+                                                        _ => panic!("ehm what?"),
+                                                    }
+                                                }
+
+
+                                                for (i, stat) in frame_stats.iter().enumerate() {
+                                                    let thick = 2;
+                                                    let y = 40 + thick*i;
+                                                    let single_w = (stat.single_threaded_time_us / 10).min(window_width);
+                                                    let work_w = (stat.work_time_us / 10).min(window_width);
+                                                    let full_w = (stat.full_time_us / 10).min(window_width);
+                                                    let full_w = full_w.max(work_w) - work_w;
+                                                    let work_w = work_w.max(single_w) - single_w;
+                                                    let single_color = if stat.full_time_us < target_frame_time_us { 0xbb77ee } else { 0xffbb33 };
+                                                    let work_color = if stat.full_time_us < target_frame_time_us { 0x2266ee } else { 0xee2222 };
+                                                    let full_color = if stat.full_time_us < target_frame_time_us { 0x1133ff } else { 0x991111 };
+                                                    for t in 0..thick {
+                                                        if y+t >= window_height { continue; }
+                                                        let mut put_ptr = final_output_blit_buffer.byte_add((y+t)*window_width*4) as *mut u32;
+                                                        for _ in 0..single_w {
+                                                            *put_ptr = single_color;
+                                                            put_ptr = put_ptr.byte_add(4);
+                                                        }
+                                                        for _ in 0..work_w {
+                                                            *put_ptr = work_color;
+                                                            put_ptr = put_ptr.byte_add(4);
+                                                        }
+                                                        for _ in 0..full_w {
+                                                            *put_ptr = full_color;
+                                                            put_ptr = put_ptr.byte_add(4);
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            if prev_frame_time_total_us_max_5_seconds_last_reset.elapsed().as_secs() >= 5 {
+                                                prev_frame_time_total_us_max_5_seconds = 0;
+                                                prev_frame_time_total_us_max_5_seconds_last_reset = Instant::now();
+                                            }
+
+                                            // frame pace is not interesting for profiling
+                                            let frame_pace_us = last_call_to_present_instant.elapsed().as_micros() as u64;
+                                            last_call_to_present_instant = Instant::now();
+
+                                            let need_buffer_flip = need_buffer_flip || gui_ctx.debug;
                                             if need_buffer_flip {
                                                 if okay_but_is_it_wayland(elwt) {
                                                     window.pre_present_notify();
