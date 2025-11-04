@@ -784,7 +784,6 @@ pub fn main_thread_run_program() {
                                             }
                                             gui_ctx.end_frame();
 
-                                            draw_ctx.window_resized = false;
                                             input_ctx.mouse_moved = false;
 
                                             // adapter
@@ -876,8 +875,8 @@ pub fn main_thread_run_program() {
                                                                     return;
                                                                 } else {
                                                                     *saved = got_hash;
-                                                                    (*ctx.end_frame_blit_range_start).fetch_min(tile_pixel_y, Ordering::Relaxed);
-                                                                    (*ctx.end_frame_blit_range_end).fetch_max(tile_pixel_y2, Ordering::Relaxed);
+                                                                    (*ctx.end_frame_blit_range_start).fetch_min(tile_pixel_y.min(ctx.window_height as u32), Ordering::Relaxed);
+                                                                    (*ctx.end_frame_blit_range_end).fetch_max(tile_pixel_y2.min(ctx.window_height as u32), Ordering::Relaxed);
                                                                 }
                                                             }
                                                             let mut hasher = xxhash3_64::Hasher::new();
@@ -1113,7 +1112,7 @@ pub fn main_thread_run_program() {
                                                 end_frame_blit_range_start: usize,
                                                 end_frame_blit_range_end: usize,
                                             }
-                                            let ups = EndOfFrameBlitCtx {
+                                            let mut ups = EndOfFrameBlitCtx {
                                                 render_target_0,
                                                 display_buffer: final_output_blit_buffer,
                                                 render_target_stride: draw_area_pixel_wide,
@@ -1121,6 +1120,11 @@ pub fn main_thread_run_program() {
                                                 end_frame_blit_range_start: end_frame_blit_range_start.load(Ordering::Relaxed) as usize,
                                                 end_frame_blit_range_end: end_frame_blit_range_end.load(Ordering::Relaxed) as usize,
                                             };
+                                            if draw_ctx.window_resized {
+                                                ups.end_frame_blit_range_start = 0;
+                                                ups.end_frame_blit_range_end = draw_ctx.window_height as usize;
+                                            }
+                                            draw_ctx.window_resized = false;
                                             // Note(Sam): We need to call dennis_parallel_for with is_last_time true in order for the threads to go to sleep. Therefore if we don't want to do work we pass work_count=0.
                                             dennis_parallel_for(p_thread_context, true, (need_buffer_flip as usize)*((window_height + 32 - 1) / 32), &ups as *const EndOfFrameBlitCtx as usize,
                                             |thread_id: usize, work_id: usize, work_count: usize, user_pointer: usize| {
@@ -1142,7 +1146,7 @@ pub fn main_thread_run_program() {
                                                     if work_id == work_count - 1 {
                                                         local_row_count = row_count - start_row;
                                                     }
-                                                    
+
                                                     for row in end_frame_blit_range_start+start_row..end_frame_blit_range_start+start_row+local_row_count {
                                                         let pixel_src = render_target_0.byte_add(row*render_target_stride*4) as *mut u8;
                                                         let pixel_dst = display_buffer.byte_add(row*display_buffer_stride*4) as *mut u8;
