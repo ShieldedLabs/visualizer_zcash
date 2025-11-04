@@ -58,7 +58,8 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(gui
         }
     }
 
-    gui.draw().circle(gui.input().mouse_x, gui.input().mouse_y, 5, GuiColor::rgb(1.0, 0.0, 0.0).into());
+    let (mx, my) = gui.input().mouse_pos();
+    gui.draw().circle(mx, my, 5, GuiColor::rgb(1.0, 0.0, 0.0).into());
 
     return false;
 }
@@ -119,7 +120,9 @@ impl GuiCtx {
             let tt = self.elements.get(&tt_id).unwrap();
 
             self.deferred_tooltip_wait += self.delta;
-            if el.active || el.point_within_bounds(self.input().mouse_x, self.input().mouse_y) {
+
+            let (mx, my) = self.input().mouse_pos();
+            if el.active || el.point_within_bounds(mx, my) {
                 if self.deferred_tooltip_wait >= 0.5 {
                     let mut x = self.deferred_tooltip_pos.0;
                     let mut y = self.deferred_tooltip_pos.1;
@@ -175,7 +178,7 @@ impl GuiCtx {
                 ..Default::default()
             });
 
-            return !(flags.hidden || flags.disabled);
+            return false;
         };
 
         let width = self.draw().measure_text_line(height, label);
@@ -239,12 +242,11 @@ impl GuiCtx {
             return false;
         }
 
-        let mx = self.input().mouse_x;
-        let my = self.input().mouse_y;
+        let (mx, my) = self.input().mouse_pos();
 
         element.active = element.point_within_bounds(mx, my);
         if element.active {
-            if let (true, _, _) = self.input().mouse_pressed(MouseButton::Left) {
+            if self.input().mouse_pressed(MouseButton::Left) {
                 element.hot = true;
             } else {
                 element.hot = false;

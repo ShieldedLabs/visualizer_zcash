@@ -333,73 +333,61 @@ impl DrawCtx {
 struct InputCtx {
     mouse_moved: bool,
     should_process_mouse_events: bool,
-    inflight_mouse_events:       Vec::<(winit::event::MouseButton, winit::event::ElementState, isize, isize)>,
+    inflight_mouse_events:       Vec::<(winit::event::MouseButton, winit::event::ElementState)>,
     inflight_keyboard_events:    Vec::<(winit::keyboard::KeyCode, winit::event::ElementState)>,
 
-    mouse_x: isize,
-    mouse_y: isize,
-    mouse_events_last_frame: [(bool, isize, isize); 5],
-    mouse_events_this_frame: [(bool, isize, isize); 5],
+    this_mouse_pos: (isize, isize),
+    last_mouse_pos: (isize, isize),
 
-    keyboard_events_last_frame: [bool; winit::keyboard::KeyCode::F35 as usize],
-    keyboard_events_this_frame: [bool; winit::keyboard::KeyCode::F35 as usize],
+    mouse_down:    usize,
+    mouse_pressed: usize,
+    keys_down:     usize,
+    keys_pressed:  usize,
 }
+
+const MOUSE_LEFT:   usize = 1 << 0;
+const MOUSE_MIDDLE: usize = 1 << 1;
+const MOUSE_RIGHT:  usize = 1 << 2;
 
 impl InputCtx {
     fn key_pressed(&self, key: winit::keyboard::KeyCode) -> bool {
-        let idx = key as usize;
-        return self.keyboard_events_last_frame[idx] && !self.keyboard_events_this_frame[idx];
+        let key = 1 << (key as usize);
+        return self.keys_pressed & key == key;
     }
 
     fn key_held(&self, key: winit::keyboard::KeyCode) -> bool {
-        let idx = key as usize;
-        return self.keyboard_events_last_frame[idx] && self.keyboard_events_this_frame[idx];
+        let key = 1 << (key as usize);
+        return self.keys_down & key == key;
     }
 
-    fn mouse_pressed(&self, button: winit::event::MouseButton) -> (bool, isize, isize) {
-        let state_last_frame = match button {
-            winit::event::MouseButton::Left    => self.mouse_events_last_frame[0],
-            winit::event::MouseButton::Right   => self.mouse_events_last_frame[1],
-            winit::event::MouseButton::Middle  => self.mouse_events_last_frame[2],
-            winit::event::MouseButton::Back    => self.mouse_events_last_frame[3],
-            winit::event::MouseButton::Forward => self.mouse_events_last_frame[4],
-            _ => (false, 0, 0) ,
-        };
-        let state_this_frame = match button {
-            winit::event::MouseButton::Left    => self.mouse_events_this_frame[0],
-            winit::event::MouseButton::Right   => self.mouse_events_this_frame[1],
-            winit::event::MouseButton::Middle  => self.mouse_events_this_frame[2],
-            winit::event::MouseButton::Back    => self.mouse_events_this_frame[3],
-            winit::event::MouseButton::Forward => self.mouse_events_this_frame[4],
-            _ => (false, 0, 0) ,
-        };
-
-        let dx = state_this_frame.1 - state_last_frame.1;
-        let dy = state_this_frame.2 - state_last_frame.2;
-        return (!state_last_frame.0 && state_this_frame.0, dx, dy);
+    fn mouse_pos(&self) -> (isize, isize) {
+        return self.this_mouse_pos;
     }
 
-    fn mouse_held(&self, button: winit::event::MouseButton) -> (bool, isize, isize) {
-        let state_last_frame = match button {
-            winit::event::MouseButton::Left    => self.mouse_events_last_frame[0],
-            winit::event::MouseButton::Right   => self.mouse_events_last_frame[1],
-            winit::event::MouseButton::Middle  => self.mouse_events_last_frame[2],
-            winit::event::MouseButton::Back    => self.mouse_events_last_frame[3],
-            winit::event::MouseButton::Forward => self.mouse_events_last_frame[4],
-            _ => (false, 0, 0) ,
-        };
-        let state_this_frame = match button {
-            winit::event::MouseButton::Left    => self.mouse_events_this_frame[0],
-            winit::event::MouseButton::Right   => self.mouse_events_this_frame[1],
-            winit::event::MouseButton::Middle  => self.mouse_events_this_frame[2],
-            winit::event::MouseButton::Back    => self.mouse_events_this_frame[3],
-            winit::event::MouseButton::Forward => self.mouse_events_this_frame[4],
-            _ => (false, 0, 0) ,
+    fn mouse_delta(&self) -> (isize, isize) {
+        return (self.this_mouse_pos.0 - self.last_mouse_pos.0, self.this_mouse_pos.1 - self.last_mouse_pos.1);
+    }
+
+    fn mouse_pressed(&self, button: winit::event::MouseButton) -> bool {
+        let button = match button {
+            winit::event::MouseButton::Left   => MOUSE_LEFT,
+            winit::event::MouseButton::Middle => MOUSE_MIDDLE,
+            winit::event::MouseButton::Right  => MOUSE_RIGHT,
+            _ => 0,
         };
 
-        let dx = state_this_frame.1 - state_last_frame.1;
-        let dy = state_this_frame.2 - state_last_frame.2;
-        return (state_last_frame.0 && state_this_frame.0, dx, dy);
+        return self.mouse_pressed == button;
+    }
+
+    fn mouse_held(&self, button: winit::event::MouseButton) -> bool {
+        let button = match button {
+            winit::event::MouseButton::Left   => MOUSE_LEFT,
+            winit::event::MouseButton::Middle => MOUSE_MIDDLE,
+            winit::event::MouseButton::Right  => MOUSE_RIGHT,
+            _ => 0,
+        };
+
+        return self.mouse_down == button;
     }
 }
 
@@ -564,14 +552,13 @@ pub fn main_thread_run_program() {
         inflight_mouse_events: Vec::new(),
         inflight_keyboard_events: Vec::new(),
 
-        mouse_events_last_frame: [(false, 0, 0); _],
-        mouse_events_this_frame: [(false, 0, 0); _],
+        this_mouse_pos: (0, 0),
+        last_mouse_pos: (0, 0),
 
-        keyboard_events_last_frame: [false; _],
-        keyboard_events_this_frame: [false; _],
-
-        mouse_x: 0,
-        mouse_y: 0,
+        mouse_down:    0,
+        mouse_pressed: 0,
+        keys_down:     0,
+        keys_pressed:  0,
     };
 
     let mut _draw_command_count = 0usize;
@@ -624,13 +611,12 @@ pub fn main_thread_run_program() {
                                     input_ctx.should_process_mouse_events = event == winit::event::WindowEvent::CursorEntered{ device_id };
                                 },
                                 winit::event::WindowEvent::CursorMoved { device_id, position } => {
-                                    input_ctx.mouse_x = position.x as isize;
-                                    input_ctx.mouse_y = position.y as isize;
-                                    input_ctx.mouse_moved = true;
+                                    input_ctx.this_mouse_pos = (position.x as isize, position.y as isize);
+                                    input_ctx.mouse_moved    = true;
                                 },
                                 winit::event::WindowEvent::MouseInput { device_id, state, button } => {
                                     if input_ctx.should_process_mouse_events {
-                                        input_ctx.inflight_mouse_events.push((button, state, input_ctx.mouse_x, input_ctx.mouse_y));
+                                        input_ctx.inflight_mouse_events.push((button, state));
                                     }
                                 },
                                 winit::event::WindowEvent::KeyboardInput { device_id, event, is_synthetic } => {
@@ -654,37 +640,41 @@ pub fn main_thread_run_program() {
                                             is_anything_happening_at_all_in_any_way |= draw_ctx.window_resized;
                                             is_anything_happening_at_all_in_any_way |= input_ctx.mouse_moved;
 
-                                            input_ctx.mouse_events_last_frame.copy_from_slice(&input_ctx.mouse_events_this_frame);
-                                            if !input_ctx.should_process_mouse_events {
-                                                // if we lost focus, clear mouse events so we don't accidentally persist events
-                                                for e in &mut input_ctx.mouse_events_this_frame
-                                                { *e = (false, 0, 0); }
-                                            }
-                                            for (button, state, x, y) in &input_ctx.inflight_mouse_events {
-                                                let ptr = match button {
-                                                    winit::event::MouseButton::Left    => &mut input_ctx.mouse_events_this_frame[0],
-                                                    winit::event::MouseButton::Right   => &mut input_ctx.mouse_events_this_frame[1],
-                                                    winit::event::MouseButton::Middle  => &mut input_ctx.mouse_events_this_frame[2],
-                                                    winit::event::MouseButton::Back    => &mut input_ctx.mouse_events_this_frame[3],
-                                                    winit::event::MouseButton::Forward => &mut input_ctx.mouse_events_this_frame[4],
+                                            input_ctx.mouse_pressed = 0;
+                                            input_ctx.keys_pressed  = 0;
+
+                                            for (button, state) in &input_ctx.inflight_mouse_events {
+                                                let button = match button {
+                                                    winit::event::MouseButton::Left   => MOUSE_LEFT,
+                                                    winit::event::MouseButton::Middle => MOUSE_MIDDLE,
+                                                    winit::event::MouseButton::Right  => MOUSE_RIGHT,
                                                     _ => { continue; },
                                                 };
-                                                
-                                                *ptr = (state.is_pressed(), *x, *y);
-                                                is_anything_happening_at_all_in_any_way = true;
-                                            }
 
-                                            input_ctx.keyboard_events_last_frame.copy_from_slice(&input_ctx.keyboard_events_this_frame);
-                                            for e in &mut input_ctx.keyboard_events_this_frame
-                                             { *e = false; }
+                                                if state.is_pressed() {
+                                                    input_ctx.mouse_down    |= button;
+                                                    input_ctx.mouse_pressed |= button;
+                                                }
+                                                else {
+                                                    input_ctx.mouse_down &= !button;
+                                                }
+                                            }
                                             for (key, state) in &input_ctx.inflight_keyboard_events {
-                                                input_ctx.keyboard_events_this_frame[*key as usize] = state.is_pressed();
+                                                let key = 1 << (*key as usize);
+                                                if state.is_pressed() {
+                                                    input_ctx.keys_down    |= key;
+                                                    input_ctx.keys_pressed |= key;
+                                                }
+                                                else {
+                                                    input_ctx.keys_down    &= !key;
+                                                }
                                             }
 
                                             input_ctx.inflight_mouse_events.clear();
                                             input_ctx.inflight_keyboard_events.clear();
 
-                                            is_anything_happening_at_all_in_any_way |= input_ctx.keyboard_events_this_frame != input_ctx.keyboard_events_last_frame;
+                                            is_anything_happening_at_all_in_any_way |= (input_ctx.mouse_down | input_ctx.mouse_pressed) != 0;
+                                            is_anything_happening_at_all_in_any_way |= (input_ctx.keys_down | input_ctx.keys_pressed) != 0;
 
                                             // TODO: Poll Business for spontanious events. E.g. animations are still playing. Or, we recieved new blocks to display et cetera.
 
@@ -739,8 +729,8 @@ pub fn main_thread_run_program() {
                                             let ix = (500.0 + fx*40.0) as u32;
                                             let iy = (300.0 + fy*30.0) as u32;
 
-                                            let mouse_box_x = input_ctx.mouse_x as u32;
-                                            let mouse_box_y = input_ctx.mouse_y as u32;
+                                            let mouse_box_x = input_ctx.this_mouse_pos.0 as u32;
+                                            let mouse_box_y = input_ctx.this_mouse_pos.1 as u32;
 
                                             let mut draw_commands = Vec::new();
                                             draw_commands.push(DrawCommand::ColoredRectangle { x: 0, x2: window_width as u32, y: 0, y2: window_height as u32, color: 0x222222 });
@@ -1162,7 +1152,7 @@ pub fn main_thread_run_program() {
                                             frame_stat_o += 1;
 
                                             prev_frame_time_total_us_max_5_seconds = prev_frame_time_total_us_max_5_seconds.max(prev_frame_time_total_us);
-                                            
+
                                             if gui_ctx.debug {
                                                 let begin_draw_commands = *draw_ctx.draw_command_count;
                                                 draw_ctx.text_line(8, 8, 16,
@@ -1173,7 +1163,7 @@ pub fn main_thread_run_program() {
                                                         prev_frame_time_us,
                                                         prev_frame_time_total_us,
                                                         prev_frame_time_total_us_max_5_seconds
-                                                    ), 
+                                                    ),
                                                     if prev_frame_time_total_us < target_frame_time_us { 0x00ff00 } else { 0xff5500 },
                                                 );
                                                 let end_draw_commands = *draw_ctx.draw_command_count;
