@@ -123,94 +123,10 @@ fn dennis_parallel_for(p_thread_context: *mut ThreadContext, is_last_time: bool,
     }
 }
 
-fn draw_measure_text_line(draw_ctx: &DrawCtx, text_height: isize, text_line: &str) -> isize {
-    let rb_face = RbFace::from_slice(SOURCE_SERIF, 0).expect("bad font");
-    let swash_font = FontRef::from_index(SOURCE_SERIF, 0).expect("font ref");
-
-    let mut buf = UnicodeBuffer::new();
-    buf.set_direction(rustybuzz::Direction::LeftToRight);
-    buf.push_str(text_line);
-    buf.set_direction(rustybuzz::Direction::LeftToRight);
-
-    let shaped = shape(&rb_face, &[], buf);
-    let infos = shaped.glyph_infos();
-    let poss = shaped.glyph_positions();
-    assert_eq!(infos.len(), poss.len());
-
-    let target_px_height: usize = text_height as usize;
-    let units_per_em: f32;
-    let ppem;
-    let glyph_row_shift: usize;
-    {
-        let m = swash_font.metrics(&[]);
-        units_per_em = m.units_per_em as f32;
-        ppem = target_px_height as f32 / ((m.ascent + m.descent + m.leading) / units_per_em);
-        glyph_row_shift = (((m.max_width / units_per_em) * ppem).ceil() as usize).next_power_of_two().trailing_zeros() as usize;
-    }
-
-    poss.iter().map(|g_pos| {
-        let px_advance = (((g_pos.x_advance as f32 / units_per_em) * ppem).ceil() as usize).min(1usize << glyph_row_shift);
-        px_advance
-    }).reduce(|acc, a| acc + a).unwrap() as isize
-}
-
-fn draw_text_line(draw_ctx: &DrawCtx, text_x: isize, text_y: isize, text_height: isize, text_line: &str, color: u32) {
-    unsafe {
-        if text_height <= 0 { return; }
-
-        let mut found_font = std::ptr::null_mut();
-        for i in 0..*draw_ctx.font_tracker_count {
-            let check = draw_ctx.font_tracker_buffer.add(i);
-            if (*check).target_px_height == text_height as usize {
-                found_font = check;
-                break;
-            }
-        }
-
+impl DrawCtx {
+    pub fn measure_text_line(&self, text_height: isize, text_line: &str) -> isize {
         let rb_face = RbFace::from_slice(SOURCE_SERIF, 0).expect("bad font");
         let swash_font = FontRef::from_index(SOURCE_SERIF, 0).expect("font ref");
-
-        if found_font == std::ptr::null_mut() {
-            found_font = draw_ctx.font_tracker_buffer.add(*draw_ctx.font_tracker_count);
-            *draw_ctx.font_tracker_count += 1;
-
-            // init the font
-            let target_px_height: usize = text_height as usize;
-            let units_per_em: f32;
-            let ppem;
-            let glyph_row_shift: usize;
-            let baseline_y: usize;
-            let max_glyph_count;
-            {
-                let m = swash_font.metrics(&[]);
-                units_per_em = m.units_per_em as f32;
-                ppem = target_px_height as f32 / ((m.ascent + m.descent + m.leading) / units_per_em);
-                glyph_row_shift = (((m.max_width / units_per_em) * ppem).ceil() as usize).next_power_of_two().trailing_zeros() as usize;
-                baseline_y = ((m.descent / units_per_em) * ppem).ceil() as usize;
-                max_glyph_count = m.glyph_count;
-            }
-            // very important the buffers do not move ever
-            let mut new_tracker = FontTracker {
-                how_many_times_was_i_used: 0,
-                target_px_height,
-                units_per_em,
-                ppem,
-                glyph_row_shift,
-                baseline_y,
-                max_glyph_count,
-                row_buffers: Vec::new(),
-                cached_bitmaps_counter: 0,
-                cached_bitmap_widths: Vec::with_capacity(max_glyph_count as usize),
-                glyph_to_bitmap_index: Vec::new(),
-            };
-            for _ in 0..target_px_height { new_tracker.row_buffers.push(Vec::with_capacity((max_glyph_count as usize) << glyph_row_shift)); }
-            for _ in 0..max_glyph_count { new_tracker.glyph_to_bitmap_index.push(u16::MAX); }
-            copy_nonoverlapping(&new_tracker as *const FontTracker, found_font, 1);
-            std::mem::forget(new_tracker);
-        }
-        let tracker = &mut *found_font;
-
-        tracker.how_many_times_was_i_used += 1;
 
         let mut buf = UnicodeBuffer::new();
         buf.set_direction(rustybuzz::Direction::LeftToRight);
@@ -222,82 +138,186 @@ fn draw_text_line(draw_ctx: &DrawCtx, text_x: isize, text_y: isize, text_height:
         let poss = shaped.glyph_positions();
         assert_eq!(infos.len(), poss.len());
 
-        let glyph_bitmap_run_start = draw_ctx.glyph_bitmap_run_allocator.add(*draw_ctx.glyph_bitmap_run_allocator_position);
-        let mut glyph_bitmap_run_count = 0usize;
+        let target_px_height: usize = text_height as usize;
+        let units_per_em: f32;
+        let ppem;
+        let glyph_row_shift: usize;
+        {
+            let m = swash_font.metrics(&[]);
+            units_per_em = m.units_per_em as f32;
+            ppem = target_px_height as f32 / ((m.ascent + m.descent + m.leading) / units_per_em);
+            glyph_row_shift = (((m.max_width / units_per_em) * ppem).ceil() as usize).next_power_of_two().trailing_zeros() as usize;
+        }
 
-        let mut acc_x = text_x;
-        for text_index in 0..infos.len() {
-            let g_info = &infos[text_index];
-            let g_pos = &poss[text_index];
+        poss.iter().map(|g_pos| {
+            let px_advance = (((g_pos.x_advance as f32 / units_per_em) * ppem).ceil() as usize).min(1usize << glyph_row_shift);
+            px_advance
+        }).reduce(|acc, a| acc + a).unwrap() as isize
+    }
 
-            let px_advance = (((g_pos.x_advance as f32 / tracker.units_per_em) * tracker.ppem).ceil() as usize).min(1usize << tracker.glyph_row_shift);
+    pub fn text_line(&self, text_x: isize, text_y: isize, text_height: isize, text_line: &str, color: u32) {
+        unsafe {
+            if text_height <= 0 { return; }
 
-            // TODO: Scissor
-            if (acc_x + px_advance as isize) <= 0 { acc_x += px_advance as isize; continue; }
-            if acc_x > draw_ctx.window_width { break; }
-
-            if tracker.glyph_to_bitmap_index[g_info.glyph_id as usize] == u16::MAX
-            {
-                let bitmap_index = tracker.cached_bitmaps_counter;
-                tracker.cached_bitmaps_counter += 1;
-                tracker.glyph_to_bitmap_index[g_info.glyph_id as usize] = bitmap_index;
-
-                tracker.cached_bitmap_widths.push(px_advance as u16);
-
-                let mut _scale = ScaleContext::new();
-                let mut scale = _scale.builder(swash_font).size(tracker.ppem).hint(false).build();
-
-                let image = swash::scale::Render::new(&[
-                    swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
-                    swash::scale::Source::Outline,
-                ])
-                .format(swash::zeno::Format::Alpha)
-                .render(&mut scale, g_info.glyph_id as u16).unwrap();
-                assert_eq!(image.content, swash::scale::image::Content::Mask);
-
-                for y in 0..tracker.target_px_height {
-                    let row_len = 1usize << tracker.glyph_row_shift;
-                    let row_put = &mut tracker.row_buffers[y];
-                    for x in 0..row_len {
-                        let cx = (x as i32 - image.placement.left) as usize;
-                        let cy = (y as i32 - tracker.target_px_height as i32 + image.placement.top + tracker.baseline_y as i32) as usize;
-                        let blend: u8;
-                        if (cx as u32) < image.placement.width && (cy as u32) < image.placement.height {
-                            blend = image.data[image.placement.width as usize * cy + cx];
-                        } else {
-                            blend = 0;
-                        }
-                        row_put.push(blend);
-                    }
-                    assert_eq!(row_put.len(), row_len * tracker.cached_bitmaps_counter as usize);
+            let mut found_font = std::ptr::null_mut();
+            for i in 0..*self.font_tracker_count {
+                let check = self.font_tracker_buffer.add(i);
+                if (*check).target_px_height == text_height as usize {
+                    found_font = check;
+                    break;
                 }
             }
 
-            *glyph_bitmap_run_start.add(glyph_bitmap_run_count) = (tracker.glyph_to_bitmap_index[g_info.glyph_id as usize], acc_x as i16);
-            glyph_bitmap_run_count += 1;
-            acc_x += px_advance as isize;
-        }
+            let rb_face = RbFace::from_slice(SOURCE_SERIF, 0).expect("bad font");
+            let swash_font = FontRef::from_index(SOURCE_SERIF, 0).expect("font ref");
 
-        *draw_ctx.glyph_bitmap_run_allocator_position += glyph_bitmap_run_count;
+            if found_font == std::ptr::null_mut() {
+                found_font = self.font_tracker_buffer.add(*self.font_tracker_count);
+                *self.font_tracker_count += 1;
 
-        for y in 0..tracker.target_px_height {
-            let row_data = &tracker.row_buffers[y];
-            let screen_y = y as isize + text_y;
-            if screen_y >= 0 && screen_y < draw_ctx.window_height {
-                *draw_ctx.draw_command_buffer.add(*draw_ctx.draw_command_count) = DrawCommand::TextRow { y: screen_y as u16, glyph_row_shift: tracker.glyph_row_shift as u8, color, glyph_bitmap_run: glyph_bitmap_run_start, glyph_bitmap_run_len: glyph_bitmap_run_count, row_bitmaps: row_data.as_ptr(), bitmap_widths: tracker.cached_bitmap_widths.as_ptr(), };
-                *draw_ctx.draw_command_count += 1;
+                // init the font
+                let target_px_height: usize = text_height as usize;
+                let units_per_em: f32;
+                let ppem;
+                let glyph_row_shift: usize;
+                let baseline_y: usize;
+                let max_glyph_count;
+                {
+                    let m = swash_font.metrics(&[]);
+                    units_per_em = m.units_per_em as f32;
+                    ppem = target_px_height as f32 / ((m.ascent + m.descent + m.leading) / units_per_em);
+                    glyph_row_shift = (((m.max_width / units_per_em) * ppem).ceil() as usize).next_power_of_two().trailing_zeros() as usize;
+                    baseline_y = ((m.descent / units_per_em) * ppem).ceil() as usize;
+                    max_glyph_count = m.glyph_count;
+                }
+                // very important the buffers do not move ever
+                let mut new_tracker = FontTracker {
+                    how_many_times_was_i_used: 0,
+                    target_px_height,
+                    units_per_em,
+                    ppem,
+                    glyph_row_shift,
+                    baseline_y,
+                    max_glyph_count,
+                    row_buffers: Vec::new(),
+                    cached_bitmaps_counter: 0,
+                    cached_bitmap_widths: Vec::with_capacity(max_glyph_count as usize),
+                    glyph_to_bitmap_index: Vec::new(),
+                };
+                for _ in 0..target_px_height { new_tracker.row_buffers.push(Vec::with_capacity((max_glyph_count as usize) << glyph_row_shift)); }
+                for _ in 0..max_glyph_count { new_tracker.glyph_to_bitmap_index.push(u16::MAX); }
+                copy_nonoverlapping(&new_tracker as *const FontTracker, found_font, 1);
+                std::mem::forget(new_tracker);
+            }
+            let tracker = &mut *found_font;
+
+            tracker.how_many_times_was_i_used += 1;
+
+            let mut buf = UnicodeBuffer::new();
+            buf.set_direction(rustybuzz::Direction::LeftToRight);
+            buf.push_str(text_line);
+            buf.set_direction(rustybuzz::Direction::LeftToRight);
+
+            let shaped = shape(&rb_face, &[], buf);
+            let infos = shaped.glyph_infos();
+            let poss = shaped.glyph_positions();
+            assert_eq!(infos.len(), poss.len());
+
+            let glyph_bitmap_run_start = self.glyph_bitmap_run_allocator.add(*self.glyph_bitmap_run_allocator_position);
+            let mut glyph_bitmap_run_count = 0usize;
+
+            let mut acc_x = text_x;
+            for text_index in 0..infos.len() {
+                let g_info = &infos[text_index];
+                let g_pos = &poss[text_index];
+
+                let px_advance = (((g_pos.x_advance as f32 / tracker.units_per_em) * tracker.ppem).ceil() as usize).min(1usize << tracker.glyph_row_shift);
+
+                // TODO: Scissor
+                if (acc_x + px_advance as isize) <= 0 { acc_x += px_advance as isize; continue; }
+                if acc_x > self.window_width { break; }
+
+                if tracker.glyph_to_bitmap_index[g_info.glyph_id as usize] == u16::MAX
+                {
+                    let bitmap_index = tracker.cached_bitmaps_counter;
+                    tracker.cached_bitmaps_counter += 1;
+                    tracker.glyph_to_bitmap_index[g_info.glyph_id as usize] = bitmap_index;
+
+                    tracker.cached_bitmap_widths.push(px_advance as u16);
+
+                    let mut _scale = ScaleContext::new();
+                    let mut scale = _scale.builder(swash_font).size(tracker.ppem).hint(false).build();
+
+                    let image = swash::scale::Render::new(&[
+                        swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
+                        swash::scale::Source::Outline,
+                    ])
+                    .format(swash::zeno::Format::Alpha)
+                    .render(&mut scale, g_info.glyph_id as u16).unwrap();
+                    assert_eq!(image.content, swash::scale::image::Content::Mask);
+
+                    for y in 0..tracker.target_px_height {
+                        let row_len = 1usize << tracker.glyph_row_shift;
+                        let row_put = &mut tracker.row_buffers[y];
+                        for x in 0..row_len {
+                            let cx = (x as i32 - image.placement.left) as usize;
+                            let cy = (y as i32 - tracker.target_px_height as i32 + image.placement.top + tracker.baseline_y as i32) as usize;
+                            let blend: u8;
+                            if (cx as u32) < image.placement.width && (cy as u32) < image.placement.height {
+                                blend = image.data[image.placement.width as usize * cy + cx];
+                            } else {
+                                blend = 0;
+                            }
+                            row_put.push(blend);
+                        }
+                        assert_eq!(row_put.len(), row_len * tracker.cached_bitmaps_counter as usize);
+                    }
+                }
+
+                *glyph_bitmap_run_start.add(glyph_bitmap_run_count) = (tracker.glyph_to_bitmap_index[g_info.glyph_id as usize], acc_x as i16);
+                glyph_bitmap_run_count += 1;
+                acc_x += px_advance as isize;
+            }
+
+            *self.glyph_bitmap_run_allocator_position += glyph_bitmap_run_count;
+
+            for y in 0..tracker.target_px_height {
+                let row_data = &tracker.row_buffers[y];
+                let screen_y = y as isize + text_y;
+                if screen_y >= 0 && screen_y < self.window_height {
+                    *self.draw_command_buffer.add(*self.draw_command_count) = DrawCommand::TextRow { y: screen_y as u16, glyph_row_shift: tracker.glyph_row_shift as u8, color, glyph_bitmap_run: glyph_bitmap_run_start, glyph_bitmap_run_len: glyph_bitmap_run_count, row_bitmaps: row_data.as_ptr(), bitmap_widths: tracker.cached_bitmap_widths.as_ptr(), };
+                    *self.draw_command_count += 1;
+                }
             }
         }
     }
-}
-fn draw_set_scissor(draw_ctx: &DrawCtx, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
 
-}
-fn draw_rectangle(draw_ctx: &DrawCtx, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
-    unsafe {
-        let put = draw_ctx.draw_command_buffer.add(*draw_ctx.draw_command_count);
-        *draw_ctx.draw_command_count += 1;
-        *put = DrawCommand::ColoredRectangle { x: x1.max(0) as u32, x2: x2.min(draw_ctx.window_width) as u32, y: y1.max(0) as u32, y2: y2.min(draw_ctx.window_height) as u32, color: color };
+    pub fn set_scissor(&self, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
+        todo!("sam ;)");
+    }
+
+    pub fn rectangle(&self, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
+        unsafe {
+            let put = self.draw_command_buffer.add(*self.draw_command_count);
+            *self.draw_command_count += 1;
+            *put = DrawCommand::ColoredRectangle { x: x1.max(0) as u32, x2: x2.min(self.window_width) as u32, y: y1.max(0) as u32, y2: y2.min(self.window_height) as u32, color: color };
+        }
+    }
+
+    pub fn rounded_rectangle(&self, x1: isize, y1: isize, x2: isize, y2: isize, radius: isize, color: u32) {
+        unsafe {
+            let put = self.draw_command_buffer.add(*self.draw_command_count);
+            *self.draw_command_count += 1;
+            *put = DrawCommand::ColoredRectangleRounded { x: x1.max(0) as u32, x2: x2.min(self.window_width) as u32, y: y1.max(0) as u32, y2: y2.min(self.window_height) as u32, radius: radius as u32, color: color };
+        }
+    }
+
+    pub fn circle(&self, x: isize, y: isize, radius: isize, color: u32) {
+        unsafe {
+            let put = self.draw_command_buffer.add(*self.draw_command_count);
+            *self.draw_command_count += 1;
+            *put = DrawCommand::ColoredCircle { x: x.max(0) as u32, y: y.max(0) as u32, radius: radius as u32, color: color };
+        }
     }
 }
 
@@ -409,6 +429,27 @@ enum DrawCommand {
         y2: u32,
         color: u32,
     },
+    ColoredRectangleRounded {
+        x: u32,
+        x2: u32,
+        y: u32,
+        y2: u32,
+        radius: u32,
+        color: u32,
+    },
+    ColoredCircle {
+        x: u32,
+        y: u32,
+        radius: u32,
+        color: u32,
+    },
+    PixelLineXDef { // will draw one pixel per x
+        x1: u16, // x1 must be less than x2
+        y1: u16,
+        x2: u16,
+        y2: u16,
+        color: u32,
+    },
     TextRow {
         y: u16,
         glyph_row_shift: u8,
@@ -418,13 +459,6 @@ enum DrawCommand {
         row_bitmaps: *const u8,
         bitmap_widths: *const u16, // TODO not this because scissor
     },
-    PixelLineXDef { // will draw one pixel per x
-        x1: u16, // x1 must be less than x2
-        y1: u16,
-        x2: u16,
-        y2: u16,
-        color: u32,
-    }
 }
 
 
@@ -685,7 +719,7 @@ pub fn main_thread_run_program() {
                                                 *draw_ctx.font_tracker_count = put;
                                             }
 
-                                            draw_text_line(&draw_ctx, -10, 200, mouse_box_y as isize, "Salvē | Hello | Привет | 你好 <- No Chinese because the fonts are very big.", 0xffffff);
+                                            draw_ctx.text_line(-10, 200, mouse_box_y as isize, "Salvē | Hello | Привет | 你好 <- No Chinese because the fonts are very big.", 0xffffff);
 
                                             gui_ctx.delta = dt;
                                             gui_ctx.input = &input_ctx;
@@ -803,6 +837,108 @@ pub fn main_thread_run_program() {
                                                                                 *(cursor_pixels as *mut u32) = color;
                                                                                 cursor_pixels = cursor_pixels.byte_add(4);
                                                                             }
+                                                                            row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
+                                                                        }
+                                                                    },
+                                                                    // @todo speedup
+                                                                    DrawCommand::ColoredRectangleRounded { mut x, mut x2, mut y, mut y2, radius, color } => {
+                                                                        x = x.max(tile_pixel_x);
+                                                                        x2 = x2.min(tile_pixel_x2);
+                                                                        y = y.max(tile_pixel_y);
+                                                                        y2 = y2.min(tile_pixel_y2);
+                                                                        if x >= x2 || y >= y2
+                                                                         { continue; }
+
+                                                                        hasher.write_u64(0x854893982098); // I have no clue what this value needs to be so it's ColoredRectangle + 1
+                                                                        hasher.write_u32(x);
+                                                                        hasher.write_u32(x2);
+                                                                        hasher.write_u32(y);
+                                                                        hasher.write_u32(y2);
+                                                                        hasher.write_u32(radius);
+                                                                        hasher.write_u32(color);
+
+                                                                        if !should_draw
+                                                                         { continue; }
+
+                                                                        let width  = x2 - x;
+                                                                        let height = y2 - y;
+                                                                        let r      = radius.min(width / 2).min(height / 2);
+                                                                        let rad_sq = (r * r) as i32;
+
+                                                                        let mut row_pixels = ctx.render_target_0.byte_add(((x + (y << pixel_row_shift)) as usize) << 2);
+                                                                        for py in y..y2 {
+                                                                            let mut cursor_pixels = row_pixels;
+                                                                            let dy = {
+                                                                                if py < y + r {
+                                                                                    (y + r - py) as i32
+                                                                                } else if py >= y2 - r {
+                                                                                    (py - (y2 - r - 1)) as i32
+                                                                                } else {
+                                                                                    0
+                                                                                }
+                                                                            };
+
+                                                                            for px in x..x2 {
+                                                                                let dx = {
+                                                                                    if px < x + r {
+                                                                                        (x + r - px) as i32
+                                                                                    } else if px >= x2 - r {
+                                                                                        (px - (x2 - r - 1)) as i32
+                                                                                    } else {
+                                                                                        0
+                                                                                    }
+                                                                                };
+
+                                                                                let in_corner = dx != 0 && dy != 0;
+                                                                                if !in_corner || (in_corner && (dx * dx + dy * dy) <= rad_sq) {
+                                                                                    *(cursor_pixels as *mut u32) = color;
+                                                                                }
+
+                                                                                cursor_pixels = cursor_pixels.byte_add(4);
+                                                                            }
+
+                                                                            row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
+                                                                        }
+                                                                    },
+                                                                    // @todo speedup
+                                                                    DrawCommand::ColoredCircle { x, y, radius, color } => {
+                                                                        let x1 = (x.saturating_sub(radius)).max(tile_pixel_x);
+                                                                        let x2 = (x + radius + 1).min(tile_pixel_x2);
+                                                                        let y1 = (y.saturating_sub(radius)).max(tile_pixel_y);
+                                                                        let y2 = (y + radius + 1).min(tile_pixel_y2);
+
+                                                                        if x1 >= x2 || y1 >= y2
+                                                                         { continue; }
+
+                                                                        hasher.write_u64(0x854893982099); // Ditto: ColoredRectangleRounded + 1
+                                                                        hasher.write_u32(x);
+                                                                        hasher.write_u32(y);
+                                                                        hasher.write_u32(radius);
+                                                                        hasher.write_u32(color);
+
+                                                                        if !should_draw
+                                                                         { continue; }
+
+                                                                        let r_sqr = (radius * radius) as i32;
+                                                                        let cx   = x as i32;
+                                                                        let cy   = y as i32;
+
+                                                                        let mut row_pixels = ctx.render_target_0.byte_add(((x1 + (y1 << pixel_row_shift)) as usize) << 2);
+                                                                        for py in y1..y2 {
+                                                                            let mut cursor_pixels = row_pixels;
+
+                                                                            let dy     = py as i32 - cy;
+                                                                            let dy_sqr = dy * dy;
+                                                                            for px in x1..x2 {
+                                                                                let dx      = px as i32 - cx;
+                                                                                let dist_sq = dx * dx + dy_sqr;
+                                                                                if dist_sq <= r_sqr {
+                                                                                    *(cursor_pixels as *mut u32) = color;
+                                                                                }
+
+                                                                                cursor_pixels = cursor_pixels.byte_add(4);
+                                                                            }
+
                                                                             row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
                                                                         }
                                                                     },

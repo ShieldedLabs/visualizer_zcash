@@ -12,10 +12,11 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(gui
     }
 
     gui.tooltip("This button says hello", 24);
-    if gui.button("Say Hello", 10, 48, 32) {
+    if gui.button("Say Hello", 10, 56, 32) {
         println!("hello!");
     }
 
+    gui.draw().circle(gui.input().mouse_x, gui.input().mouse_y, 10, GuiColor::rgb(255.0, 0.0, 0.0).into());
     return false;
 }
 
@@ -56,9 +57,9 @@ impl GuiColor {
 impl Into<u32> for GuiColor {
     fn into(self) -> u32 {
         ((self.a * 255.0) as u8 as u32) << 24 |
-        ((self.b * 255.0) as u8 as u32) << 16 |
+        ((self.r * 255.0) as u8 as u32) << 16 |
         ((self.g * 255.0) as u8 as u32) << 8 |
-        ((self.r * 255.0) as u8 as u32)
+        ((self.b * 255.0) as u8 as u32)
     }
 }
 
@@ -156,8 +157,8 @@ impl GuiCtx {
                     let x = self.deferred_tooltip_pos.0;
                     let y = self.deferred_tooltip_pos.1;
 
-                    draw_rectangle(self.draw(), x, y, x + tt.bounds.width(), y + tt.label_height, 0x00_00_00_00);
-                    draw_text_line(self.draw(), x, y, tt.label_height, &tt.label, 0xFFFFFF);
+                    self.draw().rectangle(x, y, x + tt.bounds.width(), y + tt.label_height, 0x00_00_00_00);
+                    self.draw().text_line(x, y, tt.label_height, &tt.label, 0xFFFFFF);
                 }
             }
             else {
@@ -168,10 +169,10 @@ impl GuiCtx {
     }
 
     #[track_caller]
-    pub fn tooltip(&mut self, label: &str, height: isize /* @todo(judah): automatically get this */) {
+    pub fn tooltip(&mut self, label: &str, height: isize /* @todo style */) {
         let element_id = self.unique_id(std::panic::Location::caller(), Some(label));
         let Some(el) = self.elements.get_mut(&element_id).map(magic) else {
-            let width = draw_measure_text_line(self.draw(), height, label);
+            let width = self.draw().measure_text_line(height, label);
             self.elements.insert(element_id, GuiElement {
                 id:           element_id,
                 label:        label.to_string(),
@@ -191,12 +192,12 @@ impl GuiCtx {
     pub fn button(&mut self, label: &str, x: isize, y: isize, height: isize) -> bool {
         let element_id = self.unique_id(std::panic::Location::caller(), Some(label));
         let Some(el) = self.elements.get_mut(&element_id).map(magic) else {
-            let width = draw_measure_text_line(self.draw(), height, label);
+            let width = self.draw().measure_text_line(height, label);
             self.elements.insert(element_id, GuiElement {
                 id:           element_id,
                 label:        label.to_string(),
                 label_height: height,
-                bounds:       Bounds::new(x, y, x + width, y + height),
+                bounds:       Bounds::new(x, y, x + width + 14, y + height + 5), // @todo style
                 ..Default::default()
             });
 
@@ -217,10 +218,10 @@ impl GuiCtx {
             color = self.style.highlight;
         }
 
-        draw_rectangle(self.draw(), el.bounds.x1, el.bounds.y1, el.bounds.x2, el.bounds.y2, color.into());
+        self.draw().rounded_rectangle(el.bounds.x1, el.bounds.y1, el.bounds.x2, el.bounds.y2, 5, color.into());
         // let center_x = el.bounds.0 + el.bounds.2 / 2;
         // let center_y = el.bounds.1 + el.bounds.3 / 2;
-        draw_text_line(self.draw(), el.bounds.x1, el.bounds.y1, height, &el.label, self.style.foreground.into());
+        self.draw().text_line(el.bounds.x1 + 7, el.bounds.y1 + 2, height, &el.label, self.style.foreground.into());
 
         return clicked;
     }
