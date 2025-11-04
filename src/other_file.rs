@@ -75,7 +75,7 @@ pub struct GuiCtx {
     pub delta: f64,
     pub style: GuiStyle,
 
-    debug: bool,
+    pub debug: bool,
     deferred_tooltip:      Option<(u64, u64)>, // tooltip id, element id
     deferred_tooltip_pos:  (isize, isize),
     deferred_tooltip_wait: f64,
