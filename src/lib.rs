@@ -1288,7 +1288,12 @@ pub fn main_thread_run_program() {
                                         }
                                     }
                                 }
-                                elwt.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_frame_deadline));
+                                if cfg!(target_os = "macos") {
+                                    std::thread::sleep(next_frame_deadline.saturating_duration_since(Instant::now()));
+                                    elwt.set_control_flow(winit::event_loop::ControlFlow::Poll);
+                                } else {
+                                    elwt.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_frame_deadline));
+                                }
                             }
                         },
                         _ => (),
