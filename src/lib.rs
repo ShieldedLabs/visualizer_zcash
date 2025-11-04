@@ -461,6 +461,16 @@ enum DrawCommand {
     },
 }
 
+struct FrameStat {
+    work_time_us: u64,
+    full_time_us: u64,
+}
+impl FrameStat {
+    const _0: FrameStat = FrameStat {
+        work_time_us: 0,
+        full_time_us: 0,
+    };
+}
 
 pub fn loop_curve(t: f64) -> (f64, f64) {
     // Tunables:
@@ -493,6 +503,8 @@ pub fn main_thread_run_program() {
     // Create window + event loop.
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
 
+    let mut frame_stats = [FrameStat::_0; 512];
+    let mut frame_stat_o = 0;
     let mut frame_interval_milli_hertz = 60000;
     let mut next_frame_deadline = Instant::now() + Duration::from_secs(1000) / frame_interval_milli_hertz;
     let mut prev_frame_time_us = 0u64;
@@ -748,6 +760,26 @@ pub fn main_thread_run_program() {
                                             draw_commands.extend(std::slice::from_raw_parts(draw_ctx.draw_command_buffer as *const DrawCommand, *draw_ctx.draw_command_count).iter());
 
                                             draw_commands.push(DrawCommand::PixelLineXDef { x1: 50, y1: 500, x2: mouse_box_x as u16, y2: mouse_box_y as u16, color: 0xffbb00 });
+
+                                            if gui_ctx.debug {
+                                                let expected_frame_us = (dt * 1000.0 * 1000.0) as u64;
+                                                let x1 = 0;
+                                                let thick = 2;
+
+                                                for (i, stat) in frame_stats.iter().enumerate() {
+                                                    let y = 40 + thick*i as u16;
+                                                    let full_w = stat.full_time_us * 40 / expected_frame_us;
+                                                    let work_w = stat.work_time_us * 40 / expected_frame_us;
+                                                    let full_color = if stat.full_time_us < expected_frame_us { 0x1133ff } else { 0x991111 };
+                                                    let work_color = if stat.work_time_us < expected_frame_us { 0x2266ee } else { 0xee2222 };
+                                                    for t in 0..thick {
+                                                        draw_commands.push(DrawCommand::PixelLineXDef { x1, y1: y+t, x2: x1 + full_w as u16, y2: y+t, color: full_color });
+                                                    }
+                                                    for t in 0..thick {
+                                                        draw_commands.push(DrawCommand::PixelLineXDef { x1, y1: y+t, x2: x1 + work_w as u16, y2: y+t, color: work_color });
+                                                    }
+                                                }
+                                            }
 
                                             #[derive(Clone, Copy)]
                                             struct ExecuteCommandBufferOnTilesCtx {
@@ -1044,6 +1076,7 @@ pub fn main_thread_run_program() {
                                             }
 
                                             prev_frame_time_us = begin_frame_instant.elapsed().as_micros() as u64;
+                                            frame_stats[frame_stat_o % frame_stats.len()].work_time_us = prev_frame_time_us;
 
                                             struct EndOfFrameBlitCtx {
                                                 render_target_0: *mut u8,
@@ -1085,6 +1118,9 @@ pub fn main_thread_run_program() {
 
                                             let frame_pace_us = last_call_to_present_instant.elapsed().as_micros() as u64;
                                             last_call_to_present_instant = Instant::now();
+                                            frame_stats[frame_stat_o % frame_stats.len()].full_time_us = frame_pace_us;
+                                            frame_stat_o += 1;
+
                                             if need_buffer_flip {
                                                 if okay_but_is_it_wayland(elwt) {
                                                     window.pre_present_notify();
