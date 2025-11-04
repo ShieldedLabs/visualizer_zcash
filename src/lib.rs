@@ -802,6 +802,7 @@ pub fn main_thread_run_program() {
                                             gui_ctx.end_frame();
 
                                             input_ctx.mouse_moved = false;
+                                            draw_ctx.window_resized = false;
 
                                             // adapter
                                             draw_commands.extend(std::slice::from_raw_parts(draw_ctx.draw_command_buffer as *const DrawCommand, *draw_ctx.draw_command_count).iter());
@@ -820,8 +821,6 @@ pub fn main_thread_run_program() {
                                                 draw_commands: *const DrawCommand,
                                                 draw_command_count: usize,
                                                 draw_ctx: *const DrawCtx,
-                                                end_frame_blit_range_start: *const AtomicU32,
-                                                end_frame_blit_range_end: *const AtomicU32,
                                             }
 
                                             fn blend_u32(color_1: u32, color_2: u32, blend: u32) -> u32 {
@@ -851,8 +850,6 @@ pub fn main_thread_run_program() {
                                                 }
                                             }
 
-                                            let end_frame_blit_range_start = AtomicU32::new(u32::MAX);
-                                            let end_frame_blit_range_end = AtomicU32::new(u32::MIN);
                                             let mut ups = ExecuteCommandBufferOnTilesCtx {
                                                 render_target_0,
                                                 render_target_stride: draw_area_pixel_wide,
@@ -862,8 +859,6 @@ pub fn main_thread_run_program() {
                                                 draw_commands: draw_commands.as_ptr(),
                                                 draw_command_count: draw_commands.len(),
                                                 draw_ctx: &draw_ctx,
-                                                end_frame_blit_range_start: &end_frame_blit_range_start as *const AtomicU32,
-                                                end_frame_blit_range_end: &end_frame_blit_range_end as *const AtomicU32,
                                             };
                                             dennis_parallel_for(p_thread_context, false, tiles_wide*tiles_wide, &ups as *const ExecuteCommandBufferOnTilesCtx as usize,
                                                 |thread_id: usize, work_id: usize, work_count: usize, user_pointer: usize| {
@@ -892,8 +887,6 @@ pub fn main_thread_run_program() {
                                                                     return;
                                                                 } else {
                                                                     *saved = got_hash;
-                                                                    (*ctx.end_frame_blit_range_start).fetch_min(tile_pixel_y.min(ctx.window_height as u32), Ordering::Relaxed);
-                                                                    (*ctx.end_frame_blit_range_end).fetch_max(tile_pixel_y2.min(ctx.window_height as u32), Ordering::Relaxed);
                                                                 }
                                                             }
                                                             let mut hasher = xxhash3_64::Hasher::new();
@@ -1126,22 +1119,15 @@ pub fn main_thread_run_program() {
                                                 display_buffer: *mut u8,
                                                 render_target_stride: usize,
                                                 display_buffer_stride: usize,
-                                                end_frame_blit_range_start: usize,
-                                                end_frame_blit_range_end: usize,
+                                                row_count: usize,
                                             }
                                             let mut ups = EndOfFrameBlitCtx {
                                                 render_target_0,
                                                 display_buffer: final_output_blit_buffer,
                                                 render_target_stride: draw_area_pixel_wide,
                                                 display_buffer_stride: window_width,
-                                                end_frame_blit_range_start: end_frame_blit_range_start.load(Ordering::Relaxed) as usize,
-                                                end_frame_blit_range_end: end_frame_blit_range_end.load(Ordering::Relaxed) as usize,
+                                                row_count: window_height,
                                             };
-                                            if draw_ctx.window_resized {
-                                                ups.end_frame_blit_range_start = 0;
-                                                ups.end_frame_blit_range_end = draw_ctx.window_height as usize;
-                                            }
-                                            draw_ctx.window_resized = true; // @temporary!!!!!!
                                             // Note(Sam): We need to call dennis_parallel_for with is_last_time true in order for the threads to go to sleep. Therefore if we don't want to do work we pass work_count=0.
                                             dennis_parallel_for(p_thread_context, true, (need_buffer_flip as usize)*((window_height + 32 - 1) / 32), &ups as *const EndOfFrameBlitCtx as usize,
                                             |thread_id: usize, work_id: usize, work_count: usize, user_pointer: usize| {
@@ -1150,10 +1136,7 @@ pub fn main_thread_run_program() {
                                                     let render_target_0 = (*p_thread_context).render_target_0;
                                                     let display_buffer = (*p_thread_context).display_buffer;
 
-                                                    let end_frame_blit_range_start = (*p_thread_context).end_frame_blit_range_start;
-                                                    let end_frame_blit_range_end = (*p_thread_context).end_frame_blit_range_end;
-                                                    if end_frame_blit_range_end <= end_frame_blit_range_start { return; }
-                                                    let row_count = end_frame_blit_range_end - end_frame_blit_range_start;
+                                                    let row_count = (*p_thread_context).row_count;
 
                                                     let render_target_stride = (*p_thread_context).render_target_stride;
                                                     let display_buffer_stride = (*p_thread_context).display_buffer_stride;
@@ -1164,7 +1147,7 @@ pub fn main_thread_run_program() {
                                                         local_row_count = row_count - start_row;
                                                     }
 
-                                                    for row in end_frame_blit_range_start+start_row..end_frame_blit_range_start+start_row+local_row_count {
+                                                    for row in start_row..start_row+local_row_count {
                                                         let pixel_src = render_target_0.byte_add(row*render_target_stride*4) as *mut u8;
                                                         let pixel_dst = display_buffer.byte_add(row*display_buffer_stride*4) as *mut u8;
                                                         copy_nonoverlapping(pixel_src, pixel_dst, display_buffer_stride*4);
