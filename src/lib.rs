@@ -4,7 +4,7 @@ mod other_file;
 
 const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 0;
 
-use std::{alloc::{alloc, dealloc, Layout}, hash::Hasher, hint::spin_loop, mem::transmute, ptr::{copy_nonoverlapping, slice_from_raw_parts}, rc::Rc, sync::{atomic::{AtomicU32, Ordering}, Barrier}, time::{Duration, Instant}};
+use std::{alloc::{alloc, dealloc, Layout}, hash::Hasher, hint::spin_loop, mem::{transmute, MaybeUninit}, ptr::{copy_nonoverlapping, slice_from_raw_parts}, rc::Rc, sync::{atomic::{AtomicU32, Ordering}, Barrier}, time::{Duration, Instant}};
 use twox_hash::xxhash3_64;
 use winit::dpi::Size;
 
@@ -125,8 +125,8 @@ fn dennis_parallel_for(p_thread_context: *mut ThreadContext, is_last_time: bool,
 
 impl DrawCtx {
     pub fn measure_text_line(&self, text_height: isize, text_line: &str) -> isize {
-        let rb_face = RbFace::from_slice(SOURCE_SERIF, 0).expect("bad font");
-        let swash_font = FontRef::from_index(SOURCE_SERIF, 0).expect("font ref");
+        let rb_face = RbFace::from_slice(GOHUM_PIXEL, 0).expect("bad font");
+        let swash_font = FontRef::from_index(GOHUM_PIXEL, 0).expect("font ref");
 
         let mut buf = UnicodeBuffer::new();
         buf.set_direction(rustybuzz::Direction::LeftToRight);
@@ -168,8 +168,8 @@ impl DrawCtx {
                 }
             }
 
-            let rb_face = RbFace::from_slice(SOURCE_SERIF, 0).expect("bad font");
-            let swash_font = FontRef::from_index(SOURCE_SERIF, 0).expect("font ref");
+            let rb_face = RbFace::from_slice(GOHUM_PIXEL, 0).expect("bad font");
+            let swash_font = FontRef::from_index(GOHUM_PIXEL, 0).expect("font ref");
 
             if found_font == std::ptr::null_mut() {
                 found_font = self.font_tracker_buffer.add(*self.font_tracker_count);
@@ -258,19 +258,17 @@ impl DrawCtx {
 
                     for y in 0..tracker.target_px_height {
                         let row_len = 1usize << tracker.glyph_row_shift;
-                        let row_put = &mut tracker.row_buffers[y];
-                        for x in 0..row_len {
-                            let cx = (x as i32 - image.placement.left) as usize;
-                            let cy = (y as i32 - tracker.target_px_height as i32 + image.placement.top + tracker.baseline_y as i32) as usize;
-                            let blend: u8;
-                            if (cx as u32) < image.placement.width && (cy as u32) < image.placement.height {
-                                blend = image.data[image.placement.width as usize * cy + cx];
-                            } else {
-                                blend = 0;
-                            }
-                            row_put.push(blend);
+                        let tracker_buffer_old_len = tracker.row_buffers[y].len();
+                        tracker.row_buffers[y].reserve(row_len);
+                        tracker.row_buffers[y].set_len(tracker_buffer_old_len + row_len);
+
+                        let row_put: *mut u8 = tracker.row_buffers[y].as_mut_ptr().add(tracker_buffer_old_len);
+
+                        let cy = (y as i32 - tracker.target_px_height as i32 + image.placement.top + tracker.baseline_y as i32) as usize;
+                        std::ptr::write_bytes(row_put, 0, row_len);
+                        if (cy as u32) < image.placement.height {
+                            std::ptr::copy_nonoverlapping(&image.data[image.placement.width as usize * cy], row_put.add(image.placement.left as usize & row_len.wrapping_sub(1)), image.placement.width as usize);
                         }
-                        assert_eq!(row_put.len(), row_len * tracker.cached_bitmaps_counter as usize);
                     }
                 }
 
@@ -496,6 +494,9 @@ pub fn main_thread_run_program() {
     let mut frame_interval_milli_hertz = 60000;
     let mut next_frame_deadline = Instant::now() + Duration::from_secs(1000) / frame_interval_milli_hertz;
     let mut prev_frame_time_us = 0u64;
+    let mut prev_frame_time_total_us = 0u64;
+    let mut prev_frame_time_total_us_max_5_seconds = 0u64;
+    let mut prev_frame_time_total_us_max_5_seconds_last_reset = Instant::now();
     let mut last_call_to_present_instant = Instant::now();
     let mut frame_is_actually_queued_by_us = false;
     let mut wayland_dropped_a_frame_on_purpose_counter = 0usize;
@@ -742,7 +743,15 @@ pub fn main_thread_run_program() {
                                             gui_ctx.end_frame();
 
                                             if draw_ctx.window_resized
-                                             { draw_ctx.window_resized = false; }
+                                            { draw_ctx.window_resized = false; }
+
+                                            let target_time_us = (1000000000.0 / (frame_interval_milli_hertz as f64)) as u64;
+                                            prev_frame_time_total_us_max_5_seconds = prev_frame_time_total_us_max_5_seconds.max(prev_frame_time_total_us);
+                                            draw_ctx.text_line(8, 8, 16, &format!("Rate: {} hz | (us) deadline: {} internal:{:>5} total:{:>5} max(5s):{:>5}", frame_interval_milli_hertz as f32 / 1000.0, target_time_us, prev_frame_time_us, prev_frame_time_total_us, prev_frame_time_total_us_max_5_seconds), if prev_frame_time_total_us < target_time_us { 0x00ff00 } else { 0xff5500 });
+                                            if prev_frame_time_total_us_max_5_seconds_last_reset.elapsed().as_secs() >= 5 {
+                                                prev_frame_time_total_us_max_5_seconds = 0;
+                                                prev_frame_time_total_us_max_5_seconds_last_reset = Instant::now();
+                                            }
 
                                             // adapter
                                             draw_commands.extend(std::slice::from_raw_parts(draw_ctx.draw_command_buffer as *const DrawCommand, *draw_ctx.draw_command_count).iter());
@@ -921,7 +930,7 @@ pub fn main_thread_run_program() {
                                                                         if x1 >= x2 || y1 >= y2
                                                                          { continue; }
 
-                                                                        hasher.write_u64(0x854893982099); // Ditto: ColoredRectangleRounded + 1
+                                                                        hasher.write_u64(0x3945803434);
                                                                         hasher.write_u32(x);
                                                                         hasher.write_u32(y);
                                                                         hasher.write_u32(radius);
@@ -967,8 +976,8 @@ pub fn main_thread_run_program() {
                                                                             hasher.write_u16(y);
                                                                             hasher.write_usize(row_bitmaps as usize);
                                                                             hasher.write_usize(bitmap_widths as usize);
+                                                                            hasher.write_u32(color);
                                                                             // TODO rethink, font id?
-                                                                            // TODO color
                                                                             if should_draw == false { continue; }
 
                                                                             let mut copy_data = row_bitmaps.byte_add((lookup_index as usize) << glyph_row_shift);
@@ -1083,6 +1092,7 @@ pub fn main_thread_run_program() {
                                                 }
                                             });
 
+                                            prev_frame_time_total_us = begin_frame_instant.elapsed().as_micros() as u64;
                                             let frame_pace_us = last_call_to_present_instant.elapsed().as_micros() as u64;
                                             last_call_to_present_instant = Instant::now();
                                             if need_buffer_flip {
@@ -1092,8 +1102,6 @@ pub fn main_thread_run_program() {
                                                 buffer.present().unwrap();
                                             }
                                             frame_is_actually_queued_by_us = false;
-                                            // println!("frame time: {} us", prev_frame_time_us);
-                                            // println!("frame pace: {} us", frame_pace_us);
                                             if okay_but_is_it_wayland(elwt) {
                                                 if need_buffer_flip {
                                                     window.request_redraw();

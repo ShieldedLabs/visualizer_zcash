@@ -15,9 +15,6 @@ macro_rules! gui_flags {
 }
 
 pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(gui: &mut GuiCtx) -> bool {
-    gui.debug_last_frame = gui.debug_this_frame;
-    gui.debug_this_frame = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
-
     if gui.input().key_pressed(KeyCode::Tab) {
         gui.debug = !gui.debug;
     }
@@ -63,10 +60,6 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(gui
 
     gui.draw().circle(gui.input().mouse_x, gui.input().mouse_y, 5, GuiColor::rgb(1.0, 0.0, 0.0).into());
 
-    // "real"
-    let real_delta = gui.debug_this_frame - gui.debug_last_frame;
-    gui.draw().text_line(10, 10, 16, &format!("fps: {:.1}, delta: {:.4}", 1.0 / real_delta, real_delta), GuiColor::DEBUG_GREEN.into());
-
     return false;
 }
 
@@ -89,9 +82,6 @@ pub struct GuiCtx {
 
     elements:      std::collections::HashMap<u64, GuiElement>,
     tooltip_stack: Vec<u64>,
-
-    debug_last_frame: f64,
-    debug_this_frame: f64,
 }
 
 #[derive(Debug, Default, Clone)]
