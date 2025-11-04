@@ -346,6 +346,8 @@ pub fn main_thread_run_program() {
         mouse_y: 0,
     };
 
+    let mut gui_ctx = GuiCtx::new();
+
     let mut t: f64 = 0.0;
 
     let mut window: Option<Rc<winit::window::Window>> = None;
@@ -476,8 +478,7 @@ pub fn main_thread_run_program() {
                                             let mut draw_commands = Vec::new();
                                             draw_commands.push(DrawCommand::ColoredRectangle { x: 0, x2: window_width as u32, y: 0, y2: window_height as u32, color: 0x222222 });
                                             draw_commands.push(DrawCommand::ColoredRectangle { x: ix, x2: ix + 50, y: iy, y2: iy+40, color: 0x3357FF });
-
-                                            draw_commands.push(DrawCommand::ColoredRectangle { x: mouse_box_x, x2: mouse_box_x + 100, y: mouse_box_y, y2: mouse_box_y+50, color: 0xFF3366 });
+                                            draw_commands.push(DrawCommand::ColoredRectangle { x: mouse_box_x, x2: mouse_box_x.wrapping_add(100), y: mouse_box_y, y2: mouse_box_y.wrapping_add(50), color: 0xFF3366 });
 
                                             use rustybuzz::{shape, Face as RbFace, UnicodeBuffer};
                                             use swash::{scale::ScaleContext, FontRef};
@@ -596,7 +597,9 @@ pub fn main_thread_run_program() {
                                                 font_tracker_count: (&mut _font_tracker_count) as *mut usize,
                                             }};
 
-                                            let should_quit = demo_of_rendering_stuff_with_context_that_allocates_in_the_background(&draw_ctx, &input_ctx);
+                                            gui_ctx.input = &input_ctx;
+                                            gui_ctx.draw  = &draw_ctx;
+                                            let should_quit = demo_of_rendering_stuff_with_context_that_allocates_in_the_background(&mut gui_ctx);
                                             if should_quit {
                                                 elwt.exit();
                                             }
