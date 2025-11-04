@@ -63,6 +63,7 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(gui
 
     gui.draw().circle(gui.input().mouse_x, gui.input().mouse_y, 5, GuiColor::rgb(1.0, 0.0, 0.0).into());
 
+    // "real"
     let real_delta = gui.debug_this_frame - gui.debug_last_frame;
     gui.draw().text_line(10, 10, 16, &format!("fps: {:.1}, delta: {:.4}", 1.0 / real_delta, real_delta), GuiColor::DEBUG_GREEN.into());
 
