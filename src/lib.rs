@@ -1273,26 +1273,33 @@ pub fn main_thread_run_program() {
                                     elwt.set_control_flow(winit::event_loop::ControlFlow::Wait);
                                 }
                             } else {
-                                let now = Instant::now();
-                                if now >= next_frame_deadline {
-                                    if last_call_to_present_instant > next_frame_deadline {
+                                loop {
+                                    let now = Instant::now();
+                                    if now >= next_frame_deadline {
+                                        if last_call_to_present_instant > next_frame_deadline {
+                                        } else {
+                                            frame_is_actually_queued_by_us = true;
+                                            window.request_redraw();
+                                        }
+                                        if now - next_frame_deadline > Duration::from_millis(250) {
+                                            next_frame_deadline = Instant::now() + Duration::from_secs(1000) / frame_interval_milli_hertz;
+                                        } else {
+                                            while now >= next_frame_deadline {
+                                                next_frame_deadline += Duration::from_secs(1000) / frame_interval_milli_hertz;
+                                            }
+                                        }
                                     } else {
-                                        frame_is_actually_queued_by_us = true;
-                                        window.request_redraw();
-                                    }
-                                    if now - next_frame_deadline > Duration::from_millis(250) {
-                                        next_frame_deadline = Instant::now() + Duration::from_secs(1000) / frame_interval_milli_hertz;
-                                    } else {
-                                        while now >= next_frame_deadline {
-                                            next_frame_deadline += Duration::from_secs(1000) / frame_interval_milli_hertz;
+                                        if cfg!(target_os = "macos") {
+                                            std::thread::sleep(next_frame_deadline.saturating_duration_since(Instant::now()));
+                                            continue;
                                         }
                                     }
-                                }
-                                if cfg!(target_os = "macos") {
-                                    std::thread::sleep(next_frame_deadline.saturating_duration_since(Instant::now()));
-                                    elwt.set_control_flow(winit::event_loop::ControlFlow::Poll);
-                                } else {
-                                    elwt.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_frame_deadline));
+                                    if cfg!(target_os = "macos") {
+                                        elwt.set_control_flow(winit::event_loop::ControlFlow::Poll);
+                                    } else {
+                                        elwt.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_frame_deadline));
+                                    }
+                                    break;
                                 }
                             }
                         },
