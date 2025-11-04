@@ -201,15 +201,16 @@ impl DrawCtx {
                     max_glyph_count,
                     row_buffers: Vec::new(),
                     cached_bitmaps_counter: 0,
-                    cached_bitmap_widths: Vec::with_capacity(max_glyph_count as usize),
-                    glyph_to_bitmap_index: Vec::new(),
+                    cached_bitmap_widths: Vec::new(),
+                    glyph_to_bitmap_index: Vec::with_capacity(max_glyph_count as usize),
                 };
-                for _ in 0..target_px_height { new_tracker.row_buffers.push(Vec::with_capacity((max_glyph_count as usize) << glyph_row_shift)); }
+                for _ in 0..target_px_height { new_tracker.row_buffers.push(Vec::new()); }
                 for _ in 0..max_glyph_count { new_tracker.glyph_to_bitmap_index.push(u16::MAX); }
                 copy_nonoverlapping(&new_tracker as *const FontTracker, found_font, 1);
                 std::mem::forget(new_tracker);
             }
             let tracker = &mut *found_font;
+            let tracker_id = (found_font as usize - self.font_tracker_buffer as usize) / size_of::<FontTracker>();
 
             tracker.how_many_times_was_i_used += 1;
 
@@ -283,7 +284,15 @@ impl DrawCtx {
                 let row_data = &tracker.row_buffers[y];
                 let screen_y = y as isize + text_y;
                 if screen_y >= 0 && screen_y < self.window_height {
-                    *self.draw_command_buffer.add(*self.draw_command_count) = DrawCommand::TextRow { y: screen_y as u16, glyph_row_shift: tracker.glyph_row_shift as u8, color, glyph_bitmap_run: glyph_bitmap_run_start, glyph_bitmap_run_len: glyph_bitmap_run_count, row_bitmaps: row_data.as_ptr(), bitmap_widths: tracker.cached_bitmap_widths.as_ptr(), };
+                    *self.draw_command_buffer.add(*self.draw_command_count) = DrawCommand::TextRow {
+                        y: screen_y as u16,
+                        glyph_row_shift: tracker.glyph_row_shift as u8,
+                        color,
+                        font_tracker_id: tracker_id as u16,
+                        font_row_index: y as u16,
+                        glyph_bitmap_run: glyph_bitmap_run_start,
+                        glyph_bitmap_run_len: glyph_bitmap_run_count,
+                    };
                     *self.draw_command_count += 1;
                 }
             }
@@ -452,10 +461,11 @@ enum DrawCommand {
         y: u16,
         glyph_row_shift: u8,
         color: u32,
+        font_tracker_id: u16,
+        font_row_index: u16,
+        // (lookup_id, start_x)
         glyph_bitmap_run: *const (u16, i16),
         glyph_bitmap_run_len: usize,
-        row_bitmaps: *const u8,
-        bitmap_widths: *const u16, // TODO not this because scissor
     },
 }
 
@@ -767,6 +777,7 @@ pub fn main_thread_run_program() {
                                                 saved_tile_hashes: *mut u64,
                                                 draw_commands: *const DrawCommand,
                                                 draw_command_count: usize,
+                                                draw_ctx: *const DrawCtx,
                                             }
 
                                             fn blend_u32(color_1: u32, color_2: u32, blend: u32) -> u32 {
@@ -804,6 +815,7 @@ pub fn main_thread_run_program() {
                                                 saved_tile_hashes: saved_tile_hashes.as_mut_ptr(),
                                                 draw_commands: draw_commands.as_ptr(),
                                                 draw_command_count: draw_commands.len(),
+                                                draw_ctx: &draw_ctx,
                                             };
                                             dennis_parallel_for(p_thread_context, false, tiles_wide*tiles_wide, &ups as *const ExecuteCommandBufferOnTilesCtx as usize,
                                                 |thread_id: usize, work_id: usize, work_count: usize, user_pointer: usize| {
@@ -962,8 +974,13 @@ pub fn main_thread_run_program() {
                                                                             row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
                                                                         }
                                                                     },
-                                                                    DrawCommand::TextRow { y, glyph_row_shift, color, glyph_bitmap_run, glyph_bitmap_run_len, row_bitmaps, bitmap_widths } => {
+                                                                    DrawCommand::TextRow { y, glyph_row_shift, color, font_tracker_id, font_row_index, glyph_bitmap_run, glyph_bitmap_run_len } => {
                                                                         if (y as u32) < tile_pixel_y || (y as u32) >= tile_pixel_y2 { continue; }
+
+                                                                        let font_tracker = &*(*ctx.draw_ctx).font_tracker_buffer.add(font_tracker_id as usize);
+                                                                        let bitmap_widths = font_tracker.cached_bitmap_widths.as_ptr();
+                                                                        let row_bitmaps = font_tracker.row_buffers[font_row_index as usize].as_ptr();
+
                                                                         for i in 0..glyph_bitmap_run_len {
                                                                             let (lookup_index, start_x) = *glyph_bitmap_run.add(i);
                                                                             let width = *bitmap_widths.add(lookup_index as usize) as usize;
