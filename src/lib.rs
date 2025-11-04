@@ -8,6 +8,9 @@ use std::{alloc::{alloc, dealloc, Layout}, hash::Hasher, hint::spin_loop, mem::t
 use twox_hash::xxhash3_64;
 use winit::dpi::Size;
 
+use rustybuzz::{shape, Face as RbFace, UnicodeBuffer};
+use swash::{scale::ScaleContext, FontRef};
+
 const RENDER_TILE_SHIFT: usize = 7;
 const RENDER_TILE_SIZE: usize = 1 << RENDER_TILE_SHIFT;
 const RENDER_TILE_INTRA_MASK: usize = RENDER_TILE_SIZE.wrapping_sub(1);
@@ -121,10 +124,168 @@ fn dennis_parallel_for(p_thread_context: *mut ThreadContext, is_last_time: bool,
 }
 
 fn draw_measure_text_line(draw_ctx: &DrawCtx, text_height: isize, text_line: &str) -> isize {
-    return 0;
-}
-fn draw_text_line(draw_ctx: &DrawCtx, x: isize, y: isize, text_height: isize, text_line: &str, color: u32) {
+    let rb_face = RbFace::from_slice(SOURCE_SERIF, 0).expect("bad font");
+    let swash_font = FontRef::from_index(SOURCE_SERIF, 0).expect("font ref");
 
+    let mut buf = UnicodeBuffer::new();
+    buf.set_direction(rustybuzz::Direction::LeftToRight);
+    buf.push_str(text_line);
+    buf.set_direction(rustybuzz::Direction::LeftToRight);
+
+    let shaped = shape(&rb_face, &[], buf);
+    let infos = shaped.glyph_infos();
+    let poss = shaped.glyph_positions();
+    assert_eq!(infos.len(), poss.len());
+
+    let target_px_height: usize = text_height as usize;
+    let units_per_em: f32;
+    let ppem;
+    let glyph_row_shift: usize;
+    {
+        let m = swash_font.metrics(&[]);
+        units_per_em = m.units_per_em as f32;
+        ppem = target_px_height as f32 / ((m.ascent + m.descent + m.leading) / units_per_em);
+        glyph_row_shift = (((m.max_width / units_per_em) * ppem).ceil() as usize).next_power_of_two().trailing_zeros() as usize;
+    }
+
+    poss.iter().map(|g_pos| {
+        let px_advance = (((g_pos.x_advance as f32 / units_per_em) * ppem).ceil() as usize).min(1usize << glyph_row_shift);
+        px_advance
+    }).reduce(|acc, a| acc + a).unwrap() as isize
+}
+
+fn draw_text_line(draw_ctx: &DrawCtx, x: isize, text_y: isize, text_height: isize, text_line: &str, color: u32) {
+    unsafe {
+        if text_height <= 0 { return; }
+
+        let mut found_font = std::ptr::null_mut();
+        for i in 0..*draw_ctx.draw_command_count {
+            let check = draw_ctx.font_tracker_buffer.add(i);
+            if (*check).target_px_height == text_height as usize {
+                found_font = check;
+                break;
+            }
+        }
+
+        let rb_face = RbFace::from_slice(SOURCE_SERIF, 0).expect("bad font");
+        let swash_font = FontRef::from_index(SOURCE_SERIF, 0).expect("font ref");
+
+        if found_font == std::ptr::null_mut() {
+            found_font = draw_ctx.font_tracker_buffer.add(*draw_ctx.font_tracker_count);
+            *draw_ctx.font_tracker_count += 1;
+
+            // init the font
+            let target_px_height: usize = text_height as usize;
+            let units_per_em: f32;
+            let ppem;
+            let glyph_row_shift: usize;
+            let baseline_y: usize;
+            let max_glyph_count;
+            {
+                let m = swash_font.metrics(&[]);
+                units_per_em = m.units_per_em as f32;
+                ppem = target_px_height as f32 / ((m.ascent + m.descent + m.leading) / units_per_em);
+                glyph_row_shift = (((m.max_width / units_per_em) * ppem).ceil() as usize).next_power_of_two().trailing_zeros() as usize;
+                baseline_y = ((m.descent / units_per_em) * ppem).ceil() as usize;
+                max_glyph_count = m.glyph_count;
+            }
+            // very important the buffers do not move ever
+            let mut new_tracker = FontTracker {
+                target_px_height,
+                units_per_em,
+                ppem,
+                glyph_row_shift,
+                baseline_y,
+                max_glyph_count,
+                row_buffers: Vec::new(),
+                cached_bitmaps_counter: 0,
+                cached_bitmap_widths: Vec::with_capacity(max_glyph_count as usize),
+                glyph_to_bitmap_index: Vec::new(),
+            };
+            for _ in 0..target_px_height { new_tracker.row_buffers.push(Vec::with_capacity((max_glyph_count as usize) << glyph_row_shift)); }
+            for _ in 0..max_glyph_count { new_tracker.glyph_to_bitmap_index.push(u16::MAX); }
+            copy_nonoverlapping(&new_tracker as *const FontTracker, found_font, size_of::<FontTracker>());
+            std::mem::forget(new_tracker);
+        }
+        let tracker = &mut *found_font;
+
+        let mut buf = UnicodeBuffer::new();
+        buf.set_direction(rustybuzz::Direction::LeftToRight);
+        buf.push_str(text_line);
+        buf.set_direction(rustybuzz::Direction::LeftToRight);
+
+        let shaped = shape(&rb_face, &[], buf);
+        let infos = shaped.glyph_infos();
+        let poss = shaped.glyph_positions();
+        assert_eq!(infos.len(), poss.len());
+
+        let glyph_bitmap_run_start = draw_ctx.glyph_bitmap_run_allocator.add(*draw_ctx.glyph_bitmap_run_allocator_position);
+        let mut glyph_bitmap_run_count = 0usize;
+
+        let mut acc_x = x;
+        for text_index in 0..infos.len() {
+            let g_info = &infos[text_index];
+            let g_pos = &poss[text_index];
+
+            let px_advance = (((g_pos.x_advance as f32 / tracker.units_per_em) * tracker.ppem).ceil() as usize).min(1usize << tracker.glyph_row_shift);
+
+            // TODO: Scissor
+            if (acc_x + px_advance as isize) <= 0 { acc_x += px_advance as isize; continue; }
+            if acc_x > draw_ctx.window_width { break; }
+
+            if tracker.glyph_to_bitmap_index[g_info.glyph_id as usize] == u16::MAX
+            {
+                let bitmap_index = tracker.cached_bitmaps_counter;
+                tracker.cached_bitmaps_counter += 1;
+                tracker.glyph_to_bitmap_index[g_info.glyph_id as usize] = bitmap_index;
+
+                tracker.cached_bitmap_widths.push(px_advance as u16);
+
+                let mut _scale = ScaleContext::new();
+                let mut scale = _scale.builder(swash_font).size(tracker.ppem).hint(false).build();
+
+                let image = swash::scale::Render::new(&[
+                    swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
+                    swash::scale::Source::Outline,
+                ])
+                .format(swash::zeno::Format::Alpha)
+                .render(&mut scale, g_info.glyph_id as u16).unwrap();
+                assert_eq!(image.content, swash::scale::image::Content::Mask);
+
+                for y in 0..tracker.target_px_height {
+                    let row_len = 1usize << tracker.glyph_row_shift;
+                    let row_put = &mut tracker.row_buffers[y];
+                    for x in 0..row_len {
+                        let cx = (x as i32 - image.placement.left) as usize;
+                        let cy = (y as i32 - tracker.target_px_height as i32 + image.placement.top + tracker.baseline_y as i32) as usize;
+                        let blend: u8;
+                        if (cx as u32) < image.placement.width && (cy as u32) < image.placement.height {
+                            blend = image.data[image.placement.width as usize * cy + cx];
+                        } else {
+                            blend = 0;
+                        }
+                        row_put.push(blend);
+                    }
+                    assert_eq!(row_put.len(), row_len * tracker.cached_bitmaps_counter as usize);
+                }
+            }
+
+            *glyph_bitmap_run_start.add(glyph_bitmap_run_count) = (tracker.glyph_to_bitmap_index[g_info.glyph_id as usize], acc_x as i16);
+            glyph_bitmap_run_count += 1;
+            acc_x += px_advance as isize;
+        }
+
+        *draw_ctx.glyph_bitmap_run_allocator_position += glyph_bitmap_run_count;
+
+        for y in 0..tracker.target_px_height {
+            let row_data = &tracker.row_buffers[y];
+            let screen_y = y as isize + text_y;
+            if screen_y >= 0 && screen_y < draw_ctx.window_height {
+                *draw_ctx.draw_command_buffer.add(*draw_ctx.draw_command_count) = DrawCommand::TextRow { y: screen_y as u16, glyph_row_shift: tracker.glyph_row_shift as u8, color, glyph_bitmap_run: glyph_bitmap_run_start, glyph_bitmap_run_len: glyph_bitmap_run_count, row_bitmaps: row_data.as_ptr(), bitmap_widths: tracker.cached_bitmap_widths.as_ptr(), };
+                *draw_ctx.draw_command_count += 1;
+            }
+        }
+    }
 }
 fn draw_set_scissor(draw_ctx: &DrawCtx, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
 
@@ -217,9 +378,9 @@ struct FontTracker {
     ppem: f32,
     glyph_row_shift: usize,
     baseline_y: usize,
-    max_glyph_count: usize,
+    max_glyph_count: u16,
     row_buffers: Vec<Vec<u8>>,
-    cached_bitmaps_counter: usize,
+    cached_bitmaps_counter: u16,
     cached_bitmap_widths: Vec<u16>,
     glyph_to_bitmap_index: Vec<u16>,
 }
@@ -480,8 +641,6 @@ pub fn main_thread_run_program() {
                                             draw_commands.push(DrawCommand::ColoredRectangle { x: ix, x2: ix + 50, y: iy, y2: iy+40, color: 0x3357FF });
                                             draw_commands.push(DrawCommand::ColoredRectangle { x: mouse_box_x, x2: mouse_box_x.wrapping_add(100), y: mouse_box_y, y2: mouse_box_y.wrapping_add(50), color: 0xFF3366 });
 
-                                            use rustybuzz::{shape, Face as RbFace, UnicodeBuffer};
-                                            use swash::{scale::ScaleContext, FontRef};
                                             let rb_face = RbFace::from_slice(SOURCE_SERIF, 0).expect("bad font");
                                             let swash_font = FontRef::from_index(SOURCE_SERIF, 0).expect("font ref");
 
