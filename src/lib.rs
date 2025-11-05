@@ -438,6 +438,15 @@ impl DrawCtx {
         }
     }
 
+    pub fn line(&self, x1: isize, y1: isize, x2: isize, y2: isize, thickness: f32, color: u32) {
+        unsafe {
+            let put = self.draw_command_buffer.add(*self.draw_command_count);
+            *self.draw_command_count += 1;
+            let thickness = if thickness < 0.0 || thickness.is_normal() == false { 0.0 } else { thickness };
+            *put = DrawCommand::PixelLineXDef { x1: x1 as i16, x2: x2 as i16, y1: y1 as i16, y2: y2 as i16, color: color, thickness };
+        }
+    }
+
     pub fn rounded_rectangle(&self, x1: isize, y1: isize, x2: isize, y2: isize, radius: isize, color: u32) {
         unsafe {
             let put = self.draw_command_buffer.add(*self.draw_command_count);
@@ -581,11 +590,12 @@ enum DrawCommand {
         color: u32,
     },
     PixelLineXDef { // will draw one pixel per x
-        x1: u16, // x1 must be less than x2
-        y1: u16,
-        x2: u16,
-        y2: u16,
+        x1: i16, // x1 must be less than x2
+        y1: i16,
+        x2: i16,
+        y2: i16,
         color: u32,
+        thickness: f32,
     },
     TextRow {
         y: u16,
@@ -928,14 +938,6 @@ pub fn main_thread_run_program() {
 
                                             let dt = 1000.0 / (frame_interval_milli_hertz as f64);
 
-                                            let mouse_box_x = input_ctx.this_mouse_pos.0 as u32;
-                                            let mouse_box_y = input_ctx.this_mouse_pos.1 as u32;
-
-                                            let mut draw_commands = Vec::new();
-                                            draw_commands.push(DrawCommand::ColoredRectangle { x: 0, x2: window_width as u32, y: 0, y2: window_height as u32, color: 0x222222 });
-                                            // draw_commands.push(DrawCommand::ColoredRectangle { x: ix, x2: ix + 50, y: iy, y2: iy+40, color: 0x3357FF });
-                                            // draw_commands.push(DrawCommand::ColoredRectangle { x: mouse_box_x, x2: mouse_box_x.wrapping_add(100), y: mouse_box_y, y2: mouse_box_y.wrapping_add(50), color: 0xFF3366 });
-
                                             draw_ctx.window_width = window_width as isize;
                                             draw_ctx.window_height = window_height as isize;
                                             *draw_ctx.draw_command_count = 0;
@@ -965,40 +967,35 @@ pub fn main_thread_run_program() {
                                                 play_sound(SOUND_UI_WOOSH, 0.5+0.1*rand::random::<f32>(), 1.0+0.5*rand::random::<f32>());
                                             }
 
-                                            draw_ctx.mono_text_line(-10, 200, mouse_box_y as isize, "Hello | Привет | 0472ba37e", 0xffffff);
+                                            // clear screen
+                                            draw_ctx.rectangle(0, 0, draw_ctx.window_width, draw_ctx.window_height, 0xff_000000);
+                                            draw_ctx.mono_text_line(-10, 200, input_ctx.this_mouse_pos.1 as isize, "Hello | Привет | 0472ba37e", 0xffffff);
 
                                             gui_ctx.delta = dt;
                                             gui_ctx.input = &input_ctx;
                                             gui_ctx.draw  = &draw_ctx;
 
                                             {
-                                                let should_quit = ui::demo_of_rendering_stuff_with_context_that_allocates_in_the_background(&mut gui_ctx, &mut some_data_to_keep_around);
+                                                let should_quit = demo_of_rendering_stuff_with_context_that_allocates_in_the_background(&mut gui_ctx, &mut some_data_to_keep_around);
                                                 if should_quit {
                                                     elwt.exit();
                                                 }
                                             }
 
+                                            // alpha test
+                                            draw_ctx.rectangle(200, 200, 400, 400, 0xaa_ff5555);
+
+                                            // line test
+                                            for i in 0..30 {
+                                                draw_ctx.line(400, i*20 + 300, 1200, i*20 + 300+input_ctx.mouse_pos().1, i as f32 / 4.0, 0xff_00ff00);
+                                                draw_ctx.mono_text_line(350, i*20 + 300, 12, &format!("th:{}", i as f32 / 4.0,), 0xff_ffffff);
+                                            }
+
                                             input_ctx.mouse_moved = false;
-
-                                            // adapter
-                                            draw_commands.extend(std::slice::from_raw_parts(draw_ctx.draw_command_buffer as *const DrawCommand, *draw_ctx.draw_command_count).iter());
-
-                                            draw_commands.push(DrawCommand::PixelLineXDef { x1: 50, y1: 500, x2: mouse_box_x as u16, y2: mouse_box_y as u16, color: 0xffbb00 });
 
                                             prev_frame_time_single_threaded_us = begin_frame_instant.elapsed().as_micros() as usize;
 
-                                            #[derive(Clone, Copy)]
-                                            struct ExecuteCommandBufferOnTilesCtx {
-                                                render_target_0: *mut u8,
-                                                render_target_stride: usize,
-                                                window_width: usize,
-                                                window_height: usize,
-                                                saved_tile_hashes: *mut u64,
-                                                draw_commands: *const DrawCommand,
-                                                draw_command_count: usize,
-                                                draw_ctx: *const DrawCtx,
-                                            }
-
+                                            
                                             fn blend_u32(color_1: u32, color_2: u32, blend: u32) -> u32 {
                                                 let b1 = (color_1 >> 0) & 0xff;
                                                 let g1 = (color_1 >> 8) & 0xff;
@@ -1006,6 +1003,7 @@ pub fn main_thread_run_program() {
                                                 let b2 = (color_2 >> 0) & 0xff;
                                                 let g2 = (color_2 >> 8) & 0xff;
                                                 let r2 = (color_2 >> 16) & 0xff;
+                                                let blend = blend.clamp(0, 255);
                                                 let b = (b1 as u32 * (255 - blend) + b2 * blend) / 255;
                                                 let g = (g1 as u32 * (255 - blend) + g2 * blend) / 255;
                                                 let r = (r1 as u32 * (255 - blend) + r2 * blend) / 255;
@@ -1025,15 +1023,22 @@ pub fn main_thread_run_program() {
                                                     ((srgb + 0.055) / 1.055).powf(2.4)
                                                 }
                                             }
-
-                                            let mut ups = ExecuteCommandBufferOnTilesCtx {
+                                            
+                                            #[derive(Clone, Copy)]
+                                            struct ExecuteCommandBufferOnTilesCtx {
+                                                render_target_0: *mut u8,
+                                                render_target_stride: usize,
+                                                window_width: usize,
+                                                window_height: usize,
+                                                saved_tile_hashes: *mut u64,
+                                                draw_ctx: *const DrawCtx,
+                                            }
+                                            let ups = ExecuteCommandBufferOnTilesCtx {
                                                 render_target_0,
                                                 render_target_stride: draw_area_pixel_wide,
                                                 window_width,
                                                 window_height,
                                                 saved_tile_hashes: saved_tile_hashes.as_mut_ptr(),
-                                                draw_commands: draw_commands.as_ptr(),
-                                                draw_command_count: draw_commands.len(),
                                                 draw_ctx: &draw_ctx,
                                             };
                                             dennis_parallel_for(p_thread_context, false, tiles_wide*tiles_wide, &ups as *const ExecuteCommandBufferOnTilesCtx as usize,
@@ -1066,8 +1071,10 @@ pub fn main_thread_run_program() {
                                                                 }
                                                             }
                                                             let mut hasher = xxhash3_64::Hasher::new();
-                                                            for cmd_i in 0..ctx.draw_command_count {
-                                                                match *ctx.draw_commands.byte_add(size_of::<DrawCommand>()*cmd_i) {
+                                                            let draw_commands = (*ctx.draw_ctx).draw_command_buffer;
+                                                            let draw_command_count = *(*ctx.draw_ctx).draw_command_count;
+                                                            for cmd_i in 0..draw_command_count {
+                                                                match *draw_commands.byte_add(size_of::<DrawCommand>()*cmd_i) {
                                                                     DrawCommand::ColoredRectangle { mut x, mut x2, mut y, mut y2, color } => {
                                                                         x = x.max(tile_pixel_x);
                                                                         x2 = x2.min(tile_pixel_x2);
@@ -1082,13 +1089,24 @@ pub fn main_thread_run_program() {
                                                                         hasher.write_u32(color);
                                                                         if should_draw == false { continue; }
                                                                         let mut row_pixels = ctx.render_target_0.byte_add(((x + (y << pixel_row_shift)) as usize) << 2);
-                                                                        for _y in y..y2 {
-                                                                            let mut cursor_pixels = row_pixels;
-                                                                            for _x in x..x2 {
-                                                                                *(cursor_pixels as *mut u32) = color;
-                                                                                cursor_pixels = cursor_pixels.byte_add(4);
+                                                                        if color >> 24 == 0xff {
+                                                                            for _y in y..y2 {
+                                                                                let mut cursor_pixels = row_pixels;
+                                                                                for _x in x..x2 {
+                                                                                    *(cursor_pixels as *mut u32) = color;
+                                                                                    cursor_pixels = cursor_pixels.byte_add(4);
+                                                                                }
+                                                                                row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
                                                                             }
-                                                                            row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
+                                                                        } else {
+                                                                            for _y in y..y2 {
+                                                                                let mut cursor_pixels = row_pixels;
+                                                                                for _x in x..x2 {
+                                                                                    *(cursor_pixels as *mut u32) = blend_u32(*(cursor_pixels as *mut u32), color, color >> 24);
+                                                                                    cursor_pixels = cursor_pixels.byte_add(4);
+                                                                                }
+                                                                                row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
+                                                                            }
                                                                         }
                                                                     },
                                                                     // @todo speedup
@@ -1236,37 +1254,67 @@ pub fn main_thread_run_program() {
                                                                             }
                                                                         }
                                                                     },
-                                                                    DrawCommand::PixelLineXDef { x1, y1, x2, y2, color } => {
-                                                                        let start_x = (x1 as u32).max(tile_pixel_x);
-                                                                        let end_x = (x2 as u32).min(tile_pixel_x2);
+                                                                    DrawCommand::PixelLineXDef { x1, y1, x2, y2, color, thickness, } => {
+                                                                        let start_x = (x1 as isize).max(tile_pixel_x as isize);
+                                                                        let end_x = (x2 as isize).min(tile_pixel_x2 as isize);
                                                                         if start_x >= end_x { continue; }
                                                                         let dy = (y2 as f32 - y1 as f32) / (x2 - x1) as f32;
                                                                         hasher.write_u64(0x75634593484);
-                                                                        hasher.write_u16(x1);
-                                                                        hasher.write_u16(x2);
-                                                                        hasher.write_u16(y1);
-                                                                        hasher.write_u16(y2);
+                                                                        hasher.write_i16(x1);
+                                                                        hasher.write_i16(x2);
+                                                                        hasher.write_i16(y1);
+                                                                        hasher.write_i16(y2);
                                                                         hasher.write_u32(color);
                                                                         hasher.write_u32(dy.to_bits());
                                                                         if should_draw == false { continue; }
-                                                                        for real_x in start_x..end_x {
-                                                                            // ALT: anti-aliasing version
-                                                                            let fy = y1 as f32 + dy * (real_x - x1 as u32) as f32;
-                                                                            let fy1 = fy.floor();
-                                                                            let fy2 = fy.ceil();
-                                                                            let iy1 = fy1.round() as u32;
-                                                                            let iy2 = fy2.round() as u32;
-                                                                            let blend = (fy - fy2).abs();
-                                                                            let blend1 = (blend) * 255.0;
-                                                                            let blend2 = (1.0 - blend) * 255.0;
+                                                                        if thickness <= 1.0 {
+                                                                            for real_x in start_x..end_x {
+                                                                                let fy = y1 as f32 + dy * (real_x - x1 as isize) as f32;
+                                                                                let iy1 = fy.floor() as isize;
+                                                                                let iy2 = iy1+1;
+                                                                                let coverage1 = (iy2 as f32 - fy).clamp(0.0, thickness);
+                                                                                let coverage2 = thickness - coverage1;
+                                                                                let blend1 = 255.0 * linear_to_srgb_one_channel_float(coverage1);
+                                                                                let blend2 = 255.0 * linear_to_srgb_one_channel_float(coverage2);
 
-                                                                            if iy1 >= tile_pixel_y && iy1 < tile_pixel_y2 {
-                                                                                let pixel = ctx.render_target_0.byte_add(((real_x + (iy1 << pixel_row_shift)) as usize) << 2);
-                                                                                *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
+                                                                                if iy1 >= tile_pixel_y as isize && iy1 < tile_pixel_y2 as isize {
+                                                                                    let pixel = ctx.render_target_0.byte_add(((real_x + (iy1 << pixel_row_shift)) as usize) << 2);
+                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
+                                                                                }
+                                                                                if iy2 >= tile_pixel_y as isize && iy2 < tile_pixel_y2 as isize {
+                                                                                    let pixel = ctx.render_target_0.byte_add(((real_x + (iy2 << pixel_row_shift)) as usize) << 2);
+                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend2 as u32);
+                                                                                }
                                                                             }
-                                                                            if iy2 >= tile_pixel_y && iy2 < tile_pixel_y2 {
-                                                                                let pixel = ctx.render_target_0.byte_add(((real_x + (iy2 << pixel_row_shift)) as usize) << 2);
-                                                                                *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend2 as u32);
+                                                                        } else {
+                                                                            let thickness = thickness - 0.0001 * (thickness.ceil() == thickness.round()) as u32 as f32;
+                                                                            let whole_pixels = thickness.floor();
+                                                                            let whole_pixels_i = whole_pixels as isize;
+                                                                            for real_x in start_x..end_x {
+                                                                                let fy = y1 as f32 + dy * (real_x - x1 as isize) as f32 - thickness/2.0;
+                                                                                let iy1 = fy.floor() as isize;
+                                                                                let iy2 = iy1+1;
+                                                                                let coverage1 = (iy2 as f32 - fy).clamp(0.0, thickness - thickness.floor());
+                                                                                let coverage2 = (thickness - thickness.floor()) - coverage1;
+                                                                                let blend1 = 255.0 * linear_to_srgb_one_channel_float(coverage1);
+                                                                                let blend2 = 255.0 * linear_to_srgb_one_channel_float(coverage2);
+
+                                                                                let iy2 = iy2 + whole_pixels_i;
+
+                                                                                if iy1 >= tile_pixel_y as isize && iy1 < tile_pixel_y2 as isize {
+                                                                                    let pixel = ctx.render_target_0.byte_add(((real_x + (iy1 << pixel_row_shift)) as usize) << 2);
+                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
+                                                                                }
+                                                                                for y_mid in iy1+1..iy2 {
+                                                                                    if y_mid >= tile_pixel_y as isize && y_mid < tile_pixel_y2 as isize {
+                                                                                        let pixel = ctx.render_target_0.byte_add(((real_x + (y_mid << pixel_row_shift)) as usize) << 2);
+                                                                                        *(pixel as *mut u32) = color;
+                                                                                    }
+                                                                                }
+                                                                                if iy2 >= tile_pixel_y as isize && iy2 < tile_pixel_y2 as isize {
+                                                                                    let pixel = ctx.render_target_0.byte_add(((real_x + (iy2 << pixel_row_shift)) as usize) << 2);
+                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend2 as u32);
+                                                                                }
                                                                             }
                                                                         }
                                                                     },
