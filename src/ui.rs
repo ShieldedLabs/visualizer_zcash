@@ -145,7 +145,7 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
 
     ui.push_parent(right_panel);
     {
-        let event = ui.textbox_ex("Type in me!", Flags::DEFAULT_TEXTBOX_FLAGS);
+        let event = ui.textbox_ex("Type in me!", Flags::DEFAULT_TEXTBOX_FLAGS | Flags::KEEP_FOCUS);
         if event.submitted {
             let text = event.text.trim();
             if text.len() > 0 {
@@ -360,14 +360,15 @@ impl Context {
                     e.text      = widget.text_buf.clone();
                     e.submitted = true;
 
-                    self.hot_input = WidgetId::INVALID;
+                    if !widget.flags.contains(Flags::KEEP_FOCUS) {
+                        self.hot_input = WidgetId::INVALID;
+                    }
+
                     widget.text_buf.clear();
                     widget.text_idx = 0;
                 }
                 if self.input().key_pressed(KeyCode::Escape) {
                     self.hot_input = WidgetId::INVALID;
-                    widget.text_buf.clear();
-                    widget.text_idx = 0;
                 }
             }
         }
@@ -535,7 +536,7 @@ impl Context {
             }
 
             let cursor_rect = Rect::new(x1, widget.rel_rect.y1 + 4.0, x1 + 1.0, widget.rel_rect.y2 - 4.0); // @todo style
-            self.draw_commands.push(DrawCommand::Rect(cursor_rect, None, Color::DEBUG_RED));
+            self.draw_commands.push(DrawCommand::Rect(cursor_rect, None, Color::DEBUG_RED)); // @todo style
         }
 
         for i in 0..widget.children.len() {
@@ -620,8 +621,8 @@ pub struct Context {
 bitset!(Flags<u64>,
     NONE = 0 << 0,
 
-    HIDDEN   = 1 << 1,
-    DISABLED = 1 << 2,
+    HIDDEN     = 1 << 1,
+    DISABLED   = 1 << 2,
 
     // HOVERABLE   = 1 <<  9,
     CLICKABLE   = 1 << 10,
@@ -635,6 +636,11 @@ bitset!(Flags<u64>,
     DRAW_BORDER     = 1 << 20,
 
     CLIP_CHILDREN = 1 << 25,
+    KEEP_FOCUS    = 1 << 26,
+
+
+    // Widget Defaults
+    //////////////////
 
     DEFAULT_LABEL_FLAGS = Flags::DRAW_MONO_TEXT.0,
 
