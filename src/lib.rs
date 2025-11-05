@@ -656,17 +656,14 @@ pub fn setup_audio() {
     }
 }
 
-pub fn play_sound(sound_file: &'static [u8], volume: f32) {
+pub fn play_sound(sound_file: &'static [u8], volume: f32, speed: f32) {
     unsafe {
         if GLOBAL_OUTPUT_STREAM != std::ptr::null_mut() {
             let stream = &mut *GLOBAL_OUTPUT_STREAM;
             let sink = rodio::play(stream.mixer(), std::io::Cursor::new(sound_file)).unwrap();
-            std::thread::sleep(Duration::from_secs(1));
-            // if let Ok(source) = rodio::Decoder::new() {
-            //     use rodio::source::*;
-            //     //let source = source.amplify_normalized(volume);
-            //     //stream.mixer().add(source);
-            // }
+            sink.set_volume(volume);
+            sink.set_speed(speed);
+            sink.detach();
         }
     }
 }
@@ -965,7 +962,7 @@ pub fn main_thread_run_program() {
                                             if input_ctx.key_pressed(KeyCode::Space) {
                                                 println!("woosh");
 
-                                                play_sound(SOUND_UI_WOOSH, rand::random());
+                                                play_sound(SOUND_UI_WOOSH, 0.5+0.1*rand::random::<f32>(), 1.0+0.5*rand::random::<f32>());
                                             }
 
                                             draw_ctx.mono_text_line(-10, 200, mouse_box_y as isize, "Hello | Привет | 0472ba37e", 0xffffff);
