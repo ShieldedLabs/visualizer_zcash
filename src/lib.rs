@@ -4,12 +4,12 @@ mod other_file;
 
 const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 0;
 
-use std::{alloc::{alloc, dealloc, Layout}, hash::Hasher, hint::spin_loop, mem::{transmute, MaybeUninit}, ptr::{copy_nonoverlapping, slice_from_raw_parts}, rc::Rc, sync::{atomic::{AtomicU32, Ordering}, Barrier}, time::{Duration, Instant}, u32};
+use std::{alloc::{alloc, dealloc, Layout}, hash::Hasher, hint::spin_loop, mem::{transmute, MaybeUninit}, ptr::{copy_nonoverlapping, slice_from_raw_parts}, rc::Rc, sync::{atomic::{AtomicU32, Ordering}, Barrier}, time::{Duration, Instant}, u32, usize};
 use twox_hash::xxhash3_64;
 use winit::{dpi::Size, keyboard::KeyCode};
 
 use rustybuzz::{shape, Face as RbFace, UnicodeBuffer};
-use swash::{scale::ScaleContext, FontRef};
+use swash::{scale::ScaleContext, text, FontRef};
 
 const RENDER_TILE_SHIFT: usize = 7;
 const RENDER_TILE_SIZE: usize = 1 << RENDER_TILE_SHIFT;
@@ -124,9 +124,123 @@ fn dennis_parallel_for(p_thread_context: *mut ThreadContext, is_last_time: bool,
 }
 
 impl DrawCtx {
+
+    pub fn _init_font_tracker(&self, ttf_file: &'static [u8], target_px_height: usize, is_mono: bool, fudge_to_px_height: usize) -> *mut FontTracker {
+        unsafe {
+            let swash_font = FontRef::from_index(ttf_file, 0).expect("font ref");
+
+            let new_font_tracker_ptr = self.font_tracker_buffer.add(*self.font_tracker_count);
+            *self.font_tracker_count += 1;
+
+            let units_per_em: f32;
+            let ppem;
+            let glyph_row_shift: usize;
+            let baseline_y: usize;
+            let max_glyph_count;
+            {
+                let m = swash_font.metrics(&[]);
+                units_per_em = m.units_per_em as f32;
+                ppem = (if fudge_to_px_height == usize::MAX { target_px_height } else { fudge_to_px_height }) as f32 / ((m.ascent + m.descent + m.leading) / units_per_em);
+                glyph_row_shift = (((m.max_width / units_per_em) * ppem).ceil() as usize).next_power_of_two().trailing_zeros() as usize;
+                baseline_y = ((m.descent / units_per_em) * ppem).ceil() as usize;
+                max_glyph_count = m.glyph_count;
+            }
+            let mut new_tracker = FontTracker {
+                how_many_times_was_i_used: 0,
+                is_mono: is_mono,
+                ttf_file,
+                target_px_height,
+                fudge_to_px_height,
+                units_per_em,
+                ppem,
+                glyph_row_shift,
+                baseline_y,
+                max_glyph_count,
+                row_buffers: Vec::new(),
+                cached_bitmaps_counter: 0,
+                cached_bitmap_widths: Vec::new(),
+                glyph_to_bitmap_index: Vec::with_capacity(max_glyph_count as usize),
+            };
+            let actual_height = if fudge_to_px_height == usize::MAX { target_px_height } else { fudge_to_px_height };
+            for _ in 0..actual_height { new_tracker.row_buffers.push(Vec::new()); }
+            for _ in 0..max_glyph_count { new_tracker.glyph_to_bitmap_index.push(u16::MAX); }
+            copy_nonoverlapping(&new_tracker as *const FontTracker, new_font_tracker_ptr, 1);
+            std::mem::forget(new_tracker);
+            new_font_tracker_ptr
+        }
+    }
+
+    pub fn _find_or_create_font_tracker<'a>(&self, target_px_height: usize, is_mono: bool) -> (&'a mut FontTracker, usize) {
+        unsafe {
+            let mut found_font = std::ptr::null_mut();
+            for i in 0..*self.font_tracker_count {
+                let check = self.font_tracker_buffer.add(i);
+                if (*check).target_px_height == target_px_height as usize && (*check).is_mono == is_mono {
+                    found_font = check;
+                    break;
+                }
+            }
+            if found_font == std::ptr::null_mut() {
+                if is_mono {
+                    found_font = self._init_font_tracker(DEJA_VU_SANS_MONO, target_px_height, true, usize::MAX);
+                } else {
+                    found_font = self._init_font_tracker(SOURCE_SERIF, target_px_height, false, usize::MAX);
+                }
+            }
+            let tracker: &mut FontTracker = &mut *found_font;
+            let tracker_id = (found_font as usize - self.font_tracker_buffer as usize) / size_of::<FontTracker>();
+            (tracker, tracker_id)
+        }
+    }
+
+    pub fn _render_glyph_if_not_cached(tracker: &mut FontTracker, glyph_id: u16, px_advance: u16) {
+        unsafe {
+            if tracker.glyph_to_bitmap_index[glyph_id as usize] == u16::MAX
+            {
+                let swash_font = FontRef::from_index(tracker.ttf_file, 0).expect("font ref");
+
+                let bitmap_index = tracker.cached_bitmaps_counter;
+                tracker.cached_bitmaps_counter += 1;
+                tracker.glyph_to_bitmap_index[glyph_id as usize] = bitmap_index;
+
+                tracker.cached_bitmap_widths.push(px_advance);
+
+                let mut _scale = ScaleContext::new();
+                let mut scale = _scale.builder(swash_font).size(tracker.ppem).hint(false).build();
+
+                let image = swash::scale::Render::new(&[
+                    swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
+                    swash::scale::Source::Outline,
+                ])
+                .format(swash::zeno::Format::Alpha)
+                .render(&mut scale, glyph_id as u16).unwrap();
+                assert_eq!(image.content, swash::scale::image::Content::Mask);
+
+                let actual_height = if tracker.fudge_to_px_height == usize::MAX { tracker.target_px_height } else { tracker.fudge_to_px_height };
+                for y in 0..actual_height {
+                    let row_len = 1usize << tracker.glyph_row_shift;
+                    let tracker_buffer_old_len = tracker.row_buffers[y].len();
+                    tracker.row_buffers[y].reserve(row_len);
+                    tracker.row_buffers[y].set_len(tracker_buffer_old_len + row_len);
+
+                    let row_put: *mut u8 = tracker.row_buffers[y].as_mut_ptr().add(tracker_buffer_old_len);
+
+                    let cy = (y as i32 - actual_height as i32 + image.placement.top + tracker.baseline_y as i32) as usize;
+                    std::ptr::write_bytes(row_put, 0, row_len);
+                    if (cy as u32) < image.placement.height {
+                        std::ptr::copy_nonoverlapping(&image.data[image.placement.width as usize * cy], row_put.add(image.placement.left as usize & row_len.wrapping_sub(1)), image.placement.width as usize);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn measure_text_line(&self, text_height: isize, text_line: &str) -> isize {
-        let rb_face = RbFace::from_slice(GOHUM_PIXEL, 0).expect("bad font");
-        let swash_font = FontRef::from_index(GOHUM_PIXEL, 0).expect("font ref");
+        let text_height = (text_height as usize).min(4096);
+        let (tracker, _) = self._find_or_create_font_tracker(text_height, false);
+        tracker.how_many_times_was_i_used += 1;
+
+        let rb_face = RbFace::from_slice(tracker.ttf_file, 0).expect("bad font");
 
         let mut buf = UnicodeBuffer::new();
         buf.set_direction(rustybuzz::Direction::LeftToRight);
@@ -138,19 +252,8 @@ impl DrawCtx {
         let poss = shaped.glyph_positions();
         assert_eq!(infos.len(), poss.len());
 
-        let target_px_height: usize = text_height as usize;
-        let units_per_em: f32;
-        let ppem;
-        let glyph_row_shift: usize;
-        {
-            let m = swash_font.metrics(&[]);
-            units_per_em = m.units_per_em as f32;
-            ppem = target_px_height as f32 / ((m.ascent + m.descent + m.leading) / units_per_em);
-            glyph_row_shift = (((m.max_width / units_per_em) * ppem).ceil() as usize).next_power_of_two().trailing_zeros() as usize;
-        }
-
         poss.iter().map(|g_pos| {
-            let px_advance = (((g_pos.x_advance as f32 / units_per_em) * ppem).ceil() as usize).min(1usize << glyph_row_shift);
+            let px_advance = (((g_pos.x_advance as f32 / tracker.units_per_em) * tracker.ppem).ceil() as usize).min(1usize << tracker.glyph_row_shift);
             px_advance
         }).reduce(|acc, a| acc + a).unwrap() as isize
     }
@@ -158,62 +261,17 @@ impl DrawCtx {
     pub fn text_line(&self, text_x: isize, text_y: isize, text_height: isize, text_line: &str, color: u32) {
         unsafe {
             if text_height <= 0 { return; }
-            let text_height = text_height.min(4096);
+            let text_height = (text_height as usize).min(4096);
 
-            let mut found_font = std::ptr::null_mut();
-            for i in 0..*self.font_tracker_count {
-                let check = self.font_tracker_buffer.add(i);
-                if (*check).target_px_height == text_height as usize {
-                    found_font = check;
-                    break;
-                }
+            if text_height <= 2 {
+                self.rectangle(text_x, text_y, text_x + (3*text_height as isize * text_line.len() as isize)/2, text_y+text_height as isize, color);
+                return;
             }
 
-            let rb_face = RbFace::from_slice(GOHUM_PIXEL, 0).expect("bad font");
-            let swash_font = FontRef::from_index(GOHUM_PIXEL, 0).expect("font ref");
-
-            if found_font == std::ptr::null_mut() {
-                found_font = self.font_tracker_buffer.add(*self.font_tracker_count);
-                *self.font_tracker_count += 1;
-
-                // init the font
-                let target_px_height: usize = text_height as usize;
-                let units_per_em: f32;
-                let ppem;
-                let glyph_row_shift: usize;
-                let baseline_y: usize;
-                let max_glyph_count;
-                {
-                    let m = swash_font.metrics(&[]);
-                    units_per_em = m.units_per_em as f32;
-                    ppem = target_px_height as f32 / ((m.ascent + m.descent + m.leading) / units_per_em);
-                    glyph_row_shift = (((m.max_width / units_per_em) * ppem).ceil() as usize).next_power_of_two().trailing_zeros() as usize;
-                    baseline_y = ((m.descent / units_per_em) * ppem).ceil() as usize;
-                    max_glyph_count = m.glyph_count;
-                }
-                // very important the buffers do not move ever
-                let mut new_tracker = FontTracker {
-                    how_many_times_was_i_used: 0,
-                    target_px_height,
-                    units_per_em,
-                    ppem,
-                    glyph_row_shift,
-                    baseline_y,
-                    max_glyph_count,
-                    row_buffers: Vec::new(),
-                    cached_bitmaps_counter: 0,
-                    cached_bitmap_widths: Vec::new(),
-                    glyph_to_bitmap_index: Vec::with_capacity(max_glyph_count as usize),
-                };
-                for _ in 0..target_px_height { new_tracker.row_buffers.push(Vec::new()); }
-                for _ in 0..max_glyph_count { new_tracker.glyph_to_bitmap_index.push(u16::MAX); }
-                copy_nonoverlapping(&new_tracker as *const FontTracker, found_font, 1);
-                std::mem::forget(new_tracker);
-            }
-            let tracker = &mut *found_font;
-            let tracker_id = (found_font as usize - self.font_tracker_buffer as usize) / size_of::<FontTracker>();
-
+            let (tracker, tracker_id) = self._find_or_create_font_tracker(text_height, false);
             tracker.how_many_times_was_i_used += 1;
+
+            let rb_face = RbFace::from_slice(tracker.ttf_file, 0).expect("bad font");
 
             let mut buf = UnicodeBuffer::new();
             buf.set_direction(rustybuzz::Direction::LeftToRight);
@@ -239,40 +297,7 @@ impl DrawCtx {
                 if (acc_x + px_advance as isize) <= 0 { acc_x += px_advance as isize; continue; }
                 if acc_x > self.window_width { break; }
 
-                if tracker.glyph_to_bitmap_index[g_info.glyph_id as usize] == u16::MAX
-                {
-                    let bitmap_index = tracker.cached_bitmaps_counter;
-                    tracker.cached_bitmaps_counter += 1;
-                    tracker.glyph_to_bitmap_index[g_info.glyph_id as usize] = bitmap_index;
-
-                    tracker.cached_bitmap_widths.push(px_advance as u16);
-
-                    let mut _scale = ScaleContext::new();
-                    let mut scale = _scale.builder(swash_font).size(tracker.ppem).hint(false).build();
-
-                    let image = swash::scale::Render::new(&[
-                        swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
-                        swash::scale::Source::Outline,
-                    ])
-                    .format(swash::zeno::Format::Alpha)
-                    .render(&mut scale, g_info.glyph_id as u16).unwrap();
-                    assert_eq!(image.content, swash::scale::image::Content::Mask);
-
-                    for y in 0..tracker.target_px_height {
-                        let row_len = 1usize << tracker.glyph_row_shift;
-                        let tracker_buffer_old_len = tracker.row_buffers[y].len();
-                        tracker.row_buffers[y].reserve(row_len);
-                        tracker.row_buffers[y].set_len(tracker_buffer_old_len + row_len);
-
-                        let row_put: *mut u8 = tracker.row_buffers[y].as_mut_ptr().add(tracker_buffer_old_len);
-
-                        let cy = (y as i32 - tracker.target_px_height as i32 + image.placement.top + tracker.baseline_y as i32) as usize;
-                        std::ptr::write_bytes(row_put, 0, row_len);
-                        if (cy as u32) < image.placement.height {
-                            std::ptr::copy_nonoverlapping(&image.data[image.placement.width as usize * cy], row_put.add(image.placement.left as usize & row_len.wrapping_sub(1)), image.placement.width as usize);
-                        }
-                    }
-                }
+                Self::_render_glyph_if_not_cached(tracker, g_info.glyph_id as u16, px_advance as u16);
 
                 *glyph_bitmap_run_start.add(glyph_bitmap_run_count) = (tracker.glyph_to_bitmap_index[g_info.glyph_id as usize], acc_x as i16);
                 glyph_bitmap_run_count += 1;
@@ -281,8 +306,98 @@ impl DrawCtx {
 
             *self.glyph_bitmap_run_allocator_position += glyph_bitmap_run_count;
 
-            for y in 0..tracker.target_px_height {
-                let row_data = &tracker.row_buffers[y];
+            let actual_height = if tracker.fudge_to_px_height == usize::MAX { tracker.target_px_height } else { tracker.fudge_to_px_height };
+            for y in 0..actual_height {
+                let screen_y = y as isize + text_y;
+                if screen_y >= 0 && screen_y < self.window_height {
+                    *self.draw_command_buffer.add(*self.draw_command_count) = DrawCommand::TextRow {
+                        y: screen_y as u16,
+                        glyph_row_shift: tracker.glyph_row_shift as u8,
+                        color,
+                        font_tracker_id: tracker_id as u16,
+                        font_row_index: y as u16,
+                        glyph_bitmap_run: glyph_bitmap_run_start,
+                        glyph_bitmap_run_len: glyph_bitmap_run_count,
+                    };
+                    *self.draw_command_count += 1;
+                }
+            }
+        }
+    }
+
+    pub fn measure_mono_text_line(&self, text_height: isize, text_line: &str) -> isize {
+        let text_height = (text_height as usize).min(4096);
+        let (tracker, _) = self._find_or_create_font_tracker(text_height, true);
+        tracker.how_many_times_was_i_used += 1;
+
+        let rb_face = RbFace::from_slice(tracker.ttf_file, 0).expect("bad font");
+
+        let mut buf = UnicodeBuffer::new();
+        buf.set_direction(rustybuzz::Direction::LeftToRight);
+        buf.push_str(text_line);
+        buf.set_direction(rustybuzz::Direction::LeftToRight);
+
+        let shaped = shape(&rb_face, &[], buf);
+        let infos = shaped.glyph_infos();
+        let poss = shaped.glyph_positions();
+        assert_eq!(infos.len(), poss.len());
+
+        poss.iter().map(|g_pos| {
+            let px_advance = (((g_pos.x_advance as f32 / tracker.units_per_em) * tracker.ppem).ceil() as usize).min(1usize << tracker.glyph_row_shift);
+            px_advance
+        }).reduce(|acc, a| acc + a).unwrap() as isize
+    }
+
+    pub fn mono_text_line(&self, text_x: isize, text_y: isize, text_height: isize, text_line: &str, color: u32) {
+        unsafe {
+            if text_height <= 0 { return; }
+            let text_height = (text_height as usize).min(4096);
+
+            if text_height <= 2 {
+                self.rectangle(text_x, text_y, text_x + (3*text_height as isize * text_line.len() as isize)/2, text_y+text_height as isize, color);
+                return;
+            }
+
+            let (tracker, tracker_id) = self._find_or_create_font_tracker(text_height, true);
+            tracker.how_many_times_was_i_used += 1;
+
+            let rb_face = RbFace::from_slice(tracker.ttf_file, 0).expect("bad font");
+
+            let mut buf = UnicodeBuffer::new();
+            buf.set_direction(rustybuzz::Direction::LeftToRight);
+            buf.push_str(text_line);
+            buf.set_direction(rustybuzz::Direction::LeftToRight);
+
+            let shaped = shape(&rb_face, &[], buf);
+            let infos = shaped.glyph_infos();
+            let poss = shaped.glyph_positions();
+            assert_eq!(infos.len(), poss.len());
+
+            let glyph_bitmap_run_start = self.glyph_bitmap_run_allocator.add(*self.glyph_bitmap_run_allocator_position);
+            let mut glyph_bitmap_run_count = 0usize;
+
+            let mut acc_x = text_x;
+            for text_index in 0..infos.len() {
+                let g_info = &infos[text_index];
+                let g_pos = &poss[text_index];
+
+                let px_advance = (((g_pos.x_advance as f32 / tracker.units_per_em) * tracker.ppem).ceil() as usize).min(1usize << tracker.glyph_row_shift);
+
+                // TODO: Scissor
+                if (acc_x + px_advance as isize) <= 0 { acc_x += px_advance as isize; continue; }
+                if acc_x > self.window_width { break; }
+
+                Self::_render_glyph_if_not_cached(tracker, g_info.glyph_id as u16, px_advance as u16);
+
+                *glyph_bitmap_run_start.add(glyph_bitmap_run_count) = (tracker.glyph_to_bitmap_index[g_info.glyph_id as usize], acc_x as i16);
+                glyph_bitmap_run_count += 1;
+                acc_x += px_advance as isize;
+            }
+
+            *self.glyph_bitmap_run_allocator_position += glyph_bitmap_run_count;
+
+            let actual_height = if tracker.fudge_to_px_height == usize::MAX { tracker.target_px_height } else { tracker.fudge_to_px_height };
+            for y in 0..actual_height {
                 let screen_y = y as isize + text_y;
                 if screen_y >= 0 && screen_y < self.window_height {
                     *self.draw_command_buffer.add(*self.draw_command_count) = DrawCommand::TextRow {
@@ -393,7 +508,10 @@ impl InputCtx {
 
 struct FontTracker {
     how_many_times_was_i_used: usize,
+    is_mono: bool,
     target_px_height: usize,
+    fudge_to_px_height: usize,
+    ttf_file: &'static [u8],
     units_per_em: f32,
     ppem: f32,
     glyph_row_shift: usize,
@@ -497,7 +615,11 @@ fn okay_but_is_it_wayland(elwt: &winit::event_loop::ActiveEventLoop) -> bool {
 }
 
 pub static SOURCE_SERIF: &[u8] = include_bytes!("../assets/source_serif_4.ttf");
-pub static GOHUM_PIXEL: &[u8] = include_bytes!("../assets/gohum_pixel.ttf");
+pub static DEJA_VU_SANS_MONO: &[u8] = include_bytes!("../assets/deja_vu_sans_mono.ttf");
+pub static FONT_PIXEL_3X3_MONO: &[u8] = include_bytes!("../assets/3x3-Mono.ttf");
+pub static FONT_PIXEL_QUINQUE_FIVE: &[u8] = include_bytes!("../assets/QuinqueFive.ttf");
+pub static FONT_PIXEL_GOHU_11: &[u8] = include_bytes!("../assets/gohufont-uni-11.ttf");
+pub static FONT_PIXEL_GOHU_14: &[u8] = include_bytes!("../assets/gohufont-uni-14.ttf");
 
 pub fn main_thread_run_program() {
     // Create window + event loop.
@@ -576,6 +698,22 @@ pub fn main_thread_run_program() {
         font_tracker_buffer: alloc(Layout::array::<FontTracker>(8192).unwrap()) as *mut FontTracker,
         font_tracker_count: (&mut _font_tracker_count) as *mut usize,
     }};
+
+    draw_ctx._init_font_tracker(FONT_PIXEL_3X3_MONO,2, true, 4);
+    draw_ctx._init_font_tracker(FONT_PIXEL_3X3_MONO, 3, true, 4);
+    draw_ctx._init_font_tracker(FONT_PIXEL_3X3_MONO, 4, true, 4);
+    draw_ctx._init_font_tracker(FONT_PIXEL_3X3_MONO, 5, true, 4);
+    draw_ctx._init_font_tracker(FONT_PIXEL_QUINQUE_FIVE, 6, true, 6);
+    draw_ctx._init_font_tracker(FONT_PIXEL_QUINQUE_FIVE, 7, true, 6);
+    draw_ctx._init_font_tracker(FONT_PIXEL_QUINQUE_FIVE, 8, true, 6);
+    draw_ctx._init_font_tracker(FONT_PIXEL_QUINQUE_FIVE, 9, true, 6);
+    draw_ctx._init_font_tracker(FONT_PIXEL_GOHU_11, 10, true, 13);
+    draw_ctx._init_font_tracker(FONT_PIXEL_GOHU_11, 11, true, 13);
+    draw_ctx._init_font_tracker(FONT_PIXEL_GOHU_11, 12, true, 13);
+    draw_ctx._init_font_tracker(FONT_PIXEL_GOHU_11, 13, true, 13);
+    draw_ctx._init_font_tracker(FONT_PIXEL_GOHU_14, 14, true, 15);
+    draw_ctx._init_font_tracker(FONT_PIXEL_GOHU_14, 15, true, 15);
+    draw_ctx._init_font_tracker(FONT_PIXEL_GOHU_14, 16, true, 15);
 
     let mut gui_ctx = GuiCtx::new();
     gui_ctx.style   = GuiStyle::dark();
@@ -741,12 +879,12 @@ pub fn main_thread_run_program() {
                                             draw_ctx.window_height = window_height as isize;
                                             *draw_ctx.draw_command_count = 0;
                                             *draw_ctx.glyph_bitmap_run_allocator_position = 0;
-                                            // free unused fonts
+                                            // free unused fonts, except not our special ones
                                             {
                                                 let mut put = 0;
                                                 for i in 0..*draw_ctx.font_tracker_count {
                                                     let take_ptr = draw_ctx.font_tracker_buffer.add(i);
-                                                    if (*take_ptr).how_many_times_was_i_used == 0 {
+                                                    if (*take_ptr).how_many_times_was_i_used == 0 && ((*take_ptr).ttf_file == DEJA_VU_SANS_MONO || (*take_ptr).ttf_file == SOURCE_SERIF) {
                                                         std::ptr::drop_in_place(take_ptr);
                                                     } else {
                                                         let put_ptr = draw_ctx.font_tracker_buffer.add(put);
@@ -760,7 +898,7 @@ pub fn main_thread_run_program() {
                                                 *draw_ctx.font_tracker_count = put;
                                             }
 
-                                            draw_ctx.text_line(-10, 200, mouse_box_y as isize, "Salvē | Hello | Привет | 你好 <- No Chinese because the fonts are very big.", 0xffffff);
+                                            draw_ctx.mono_text_line(-10, 200, mouse_box_y as isize, "Hello | Привет | 0472ba37e", 0xffffff);
 
                                             gui_ctx.delta = dt;
                                             gui_ctx.input = &input_ctx;
@@ -1024,7 +1162,7 @@ pub fn main_thread_run_program() {
                                                                                 x1 = tile_pixel_x as isize;
                                                                             }
                                                                             let len = x2 - x1;
-                                                                            debug_assert!(len != 0);
+                                                                            if len <= 0 { continue; }
                                                                             for _ in 0..len {
                                                                                 let blend = *copy_data as u32;
                                                                                 copy_data = copy_data.byte_add(1);
@@ -1138,7 +1276,7 @@ pub fn main_thread_run_program() {
 
                                             if gui_ctx.debug {
                                                 let begin_draw_commands = *draw_ctx.draw_command_count;
-                                                draw_ctx.text_line(8, 8, 16,
+                                                draw_ctx.mono_text_line(8, 8, 13,
                                                     &format!(
                                                         "Rate: {} hz | (us) deadline: {} internal:{:>5} total:{:>5} max(5s):{:>5}",
                                                         frame_interval_milli_hertz as f32 / 1000.0,
