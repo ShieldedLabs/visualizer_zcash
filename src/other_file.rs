@@ -19,6 +19,10 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(gui
         gui.debug = !gui.debug;
     }
 
+    if let Some(text) = &gui.input().text_input {
+        println!("Text input: {}", text);
+    }
+
     let mut layout = GuiRect::new(0, 0, gui.draw().window_width, gui.draw().window_height);
 
     // LEFT PANEL
@@ -243,7 +247,6 @@ impl GuiCtx {
         }
 
         let (mx, my) = self.input().mouse_pos();
-
         element.active = element.point_within_bounds(mx, my);
         if element.active {
             if self.input().mouse_pressed(MouseButton::Left) {
@@ -296,10 +299,10 @@ pub enum CutFrom {
 impl GuiCut {
     pub fn make(&self, amount: isize) -> GuiRect {
         match self.from {
-            CutFrom::Top    => unsafe { (*self.rect).cut_from_top(amount) },
+            CutFrom::Top    => unsafe { (*self.rect).cut_from_top(amount)    },
             CutFrom::Bottom => unsafe { (*self.rect).cut_from_bottom(amount) },
-            CutFrom::Left   => unsafe { (*self.rect).cut_from_left(amount) },
-            CutFrom::Right  => unsafe { (*self.rect).cut_from_right(amount) },
+            CutFrom::Left   => unsafe { (*self.rect).cut_from_left(amount)   },
+            CutFrom::Right  => unsafe { (*self.rect).cut_from_right(amount)  },
         }
     }
 }

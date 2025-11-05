@@ -4,7 +4,7 @@ mod other_file;
 
 const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 0;
 
-use std::{alloc::{alloc, dealloc, Layout}, hash::Hasher, hint::spin_loop, mem::{transmute, MaybeUninit}, ptr::{copy_nonoverlapping, slice_from_raw_parts}, rc::Rc, sync::{atomic::{AtomicU32, Ordering}, Barrier}, time::{Duration, Instant}, u32, usize};
+use std::{alloc::{Layout, alloc, dealloc}, hash::Hasher, hint::spin_loop, mem::{MaybeUninit, transmute}, ptr::{copy_nonoverlapping, slice_from_raw_parts}, rc::Rc, sync::{Barrier, atomic::{AtomicU32, Ordering}}, time::{Duration, Instant}, u32};
 use twox_hash::xxhash3_64;
 use winit::{dpi::Size, keyboard::KeyCode};
 
@@ -446,10 +446,12 @@ impl DrawCtx {
 
 #[derive(Debug)]
 struct InputCtx {
-    mouse_moved: bool,
+    mouse_moved:                bool,
     should_process_mouse_events: bool,
-    inflight_mouse_events:       Vec::<(winit::event::MouseButton, winit::event::ElementState)>,
-    inflight_keyboard_events:    Vec::<(winit::keyboard::KeyCode, winit::event::ElementState)>,
+
+    inflight_mouse_events:    Vec::<(winit::event::MouseButton, winit::event::ElementState)>,
+    inflight_keyboard_events: Vec::<(winit::keyboard::KeyCode, winit::event::ElementState)>,
+    inflight_text_input:      String,
 
     this_mouse_pos: (isize, isize),
     last_mouse_pos: (isize, isize),
@@ -458,6 +460,7 @@ struct InputCtx {
     mouse_pressed: usize,
     keys_down:     usize,
     keys_pressed:  usize,
+    text_input:    Option<String>,
 }
 
 const MOUSE_LEFT:   usize = 1 << 0;
@@ -466,13 +469,21 @@ const MOUSE_RIGHT:  usize = 1 << 2;
 
 impl InputCtx {
     fn key_pressed(&self, key: winit::keyboard::KeyCode) -> bool {
-        let key = 1 << (key as usize);
-        return self.keys_pressed & key == key;
+        if let Some(key) = 1usize.checked_shl(key as u32) {
+            return self.keys_pressed & key == key;
+        }
+        else {
+            return false;
+        }
     }
 
     fn key_held(&self, key: winit::keyboard::KeyCode) -> bool {
-        let key = 1 << (key as usize);
-        return self.keys_down & key == key;
+        if let Some(key) = 1usize.checked_shl(key as u32) {
+            return self.keys_down & key == key;
+        }
+        else {
+            return false;
+        }
     }
 
     fn mouse_pos(&self) -> (isize, isize) {
@@ -671,8 +682,10 @@ pub fn main_thread_run_program() {
     let mut input_ctx = InputCtx {
         mouse_moved: false,
         should_process_mouse_events: true,
-        inflight_mouse_events: Vec::new(),
+
+        inflight_mouse_events:    Vec::new(),
         inflight_keyboard_events: Vec::new(),
+        inflight_text_input:      String::new(),
 
         this_mouse_pos: (0, 0),
         last_mouse_pos: (0, 0),
@@ -681,6 +694,8 @@ pub fn main_thread_run_program() {
         mouse_pressed: 0,
         keys_down:     0,
         keys_pressed:  0,
+
+        text_input: None,
     };
 
     let mut _draw_command_count = 0usize;
@@ -758,6 +773,11 @@ pub fn main_thread_run_program() {
                                     }
                                 },
                                 winit::event::WindowEvent::KeyboardInput { device_id, event, is_synthetic } => {
+                                    if let Some(text) = event.text {
+                                        let typable = text.chars().filter(|c| *c >= ' ' && *c <= '~').collect::<String>();
+                                        input_ctx.inflight_text_input.push_str(&typable);
+                                    }
+
                                     match event.physical_key {
                                         winit::keyboard::PhysicalKey::Code(kc) => {
                                             input_ctx.inflight_keyboard_events.push((kc, event.state));
@@ -798,21 +818,28 @@ pub fn main_thread_run_program() {
                                                 }
                                             }
                                             for (key, state) in &input_ctx.inflight_keyboard_events {
-                                                let key = 1 << (*key as usize);
-                                                if state.is_pressed() {
-                                                    input_ctx.keys_down    |= key;
-                                                    input_ctx.keys_pressed |= key;
-                                                }
-                                                else {
-                                                    input_ctx.keys_down    &= !key;
+                                                if let Some(key) = 1usize.checked_shl(*key as u32) {
+                                                    if state.is_pressed() {
+                                                        input_ctx.keys_down    |= key;
+                                                        input_ctx.keys_pressed |= key;
+                                                    }
+                                                    else {
+                                                        input_ctx.keys_down    &= !key;
+                                                    }
                                                 }
                                             }
+                                            input_ctx.text_input = if input_ctx.inflight_text_input.is_empty() {
+                                                None
+                                            } else {
+                                                Some(input_ctx.inflight_text_input.clone())
+                                            };
+
+                                            is_anything_happening_at_all_in_any_way |= (input_ctx.mouse_down | input_ctx.mouse_pressed) != 0;
+                                            is_anything_happening_at_all_in_any_way |= (input_ctx.keys_down  | input_ctx.keys_pressed)  != 0;
 
                                             input_ctx.inflight_mouse_events.clear();
                                             input_ctx.inflight_keyboard_events.clear();
-
-                                            is_anything_happening_at_all_in_any_way |= (input_ctx.mouse_down | input_ctx.mouse_pressed) != 0;
-                                            is_anything_happening_at_all_in_any_way |= (input_ctx.keys_down | input_ctx.keys_pressed) != 0;
+                                            input_ctx.inflight_text_input.clear();
 
                                             // TODO: Poll Business for spontanious events. E.g. animations are still playing. Or, we recieved new blocks to display et cetera.
 
