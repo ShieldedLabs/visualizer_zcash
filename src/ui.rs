@@ -164,7 +164,7 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
         }
     }
     ui.pop_parent(right_panel);
-    */;
+    */
 
     ui.end_frame();
 
@@ -179,15 +179,12 @@ impl Context {
         Self { style, ..Default::default() }
     }
 
-    const DEFAULT_CONTAINER_FLAGS: Flags = Flags(Flags::CLIP_CHILDREN.0 | Flags::DRAW_BACKGROUND.0 | Flags::DRAW_BORDER.0);
+    pub const DEFAULT_CONTAINER_FLAGS: Flags = Flags(Flags::CLIP_CHILDREN.0 | Flags::DRAW_BACKGROUND.0 | Flags::DRAW_BORDER.0);
 
     #[track_caller]
     pub fn container(&mut self, rect: Rect, flags: Flags) -> WidgetId {
         let widget = magic(self.make_or_get_widget(Self::DEFAULT_CONTAINER_FLAGS | flags, None, std::panic::Location::caller()));
-        widget.size = (
-            Size::Exact(rect.width()),
-            Size::Exact(rect.height()),
-        );
+        widget.size = (Size::Exact(rect.width()), Size::Exact(rect.height()));
         self.update_widget_events(widget);
         return widget.id;
     }
@@ -455,11 +452,11 @@ impl Context {
     }
 
     #[track_caller]
-    fn get_current_parent(&self) -> WidgetId {
+    fn get_parent_id(&self) -> WidgetId {
         return *self.parent_stack.peek();
     }
 
-    fn get_parent_by_id(&mut self, id: WidgetId) -> &mut Widget {
+    fn get_parent(&mut self, id: WidgetId) -> &mut Widget {
         self.widgets.get_mut(&id).expect("parent widget id did not exist!")
     }
 
@@ -483,8 +480,8 @@ impl Context {
 
         let id = WidgetId(h.finish());
         let parent_id = if !self.parent_stack.empty() {
-            let parent_id = self.get_current_parent();
-            let parent    = self.get_parent_by_id(parent_id);
+            let parent_id = self.get_parent_id();
+            let parent    = self.get_parent(parent_id);
             parent.children.push(id);
             Some(parent_id)
         } else {
@@ -496,7 +493,6 @@ impl Context {
             display_text: display_text,
         ));
 
-        widget.rel_row = Rect::ZERO;
         widget.children.clear();
 
         return widget;
