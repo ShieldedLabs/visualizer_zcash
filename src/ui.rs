@@ -138,19 +138,22 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
     ui.push_parent(center_panel);
     {
         // @todo: this is just going to get sent back, so the BFT tree knows where to draw
-        ui.label("Center Panel");
     }
     ui.pop_parent(center_panel);
 
 
     ui.push_parent(right_panel);
     {
-        let event = ui.textbox_ex("Type in me!", Flags::DEFAULT_TEXTBOX_FLAGS | Flags::KEEP_FOCUS);
+        let event = ui.textbox_ex("Type in me!", Flags::DEFAULT_TEXTBOX_FLAGS | if data.can_send_messages { Flags::KEEP_FOCUS } else { Flags::DISABLED });
         if event.submitted {
             let text = event.text.trim();
             if text.len() > 0 {
                 data.messages.push(text.to_string());
             }
+        }
+
+        if ui.button(if data.can_send_messages { "Disable Textbox" } else { "Enable Textbox" }) {
+            data.can_send_messages = !data.can_send_messages;
         }
 
         for (i, message) in data.messages.iter().enumerate() {
@@ -297,6 +300,16 @@ impl Context {
     fn update_widget_events(&mut self, widget: &mut Widget) -> WidgetEvents {
         let mut e = WidgetEvents::default();
         if widget.flags.contains(Flags::HIDDEN | Flags::DISABLED) {
+            if self.active_widget == widget.id {
+                self.active_widget = WidgetId::INVALID;
+            }
+            if self.hot_widget == widget.id {
+                self.hot_widget = WidgetId::INVALID;
+            }
+            if self.hot_input == widget.id {
+                self.hot_input = WidgetId::INVALID;
+            }
+
             return e;
         }
 
@@ -497,6 +510,7 @@ impl Context {
                 self.style.background
             };
 
+            let color = if widget.flags.contains(Flags::DISABLED) { color.dim(0.5) } else { color }; // @todo style
             self.draw_commands.push(DrawCommand::Rect(widget.rel_rect, None, color));
         }
 
@@ -512,7 +526,8 @@ impl Context {
                 }
             }
 
-            let font = Font((widget.flags & Flags::DRAW_SERIF_TEXT).into()); // @todo font
+            let color = if widget.flags.contains(Flags::DISABLED) { color.dim(0.5) } else { color }; // @todo style
+            let font  = Font((widget.flags & Flags::DRAW_SERIF_TEXT).into()); // @todo font
             self.draw_commands.push(DrawCommand::Text(font, widget.rel_rect.x1 as isize, widget.rel_rect.y1 as isize, color, text));
         }
 
@@ -587,6 +602,7 @@ impl Context {
             display_text: display_text,
         ));
 
+        widget.flags = flags;
         widget.children.clear();
 
         return widget;
