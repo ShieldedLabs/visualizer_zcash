@@ -1,6 +1,5 @@
 
-use other_file::*;
-mod other_file;
+mod ui;
 
 const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 0;
 
@@ -419,7 +418,6 @@ struct FontTracker {
 struct DrawCtx {
     window_width: isize,
     window_height: isize,
-    window_resized: bool,
     draw_command_buffer: *mut DrawCommand,
     draw_command_count: *mut usize,
     glyph_bitmap_run_allocator: *mut (u16, i16),
@@ -556,6 +554,7 @@ pub fn main_thread_run_program() {
     let mut render_target_0 = std::ptr::null_mut();
     let mut saved_tile_hashes = Vec::new();
     let mut whole_screen_hash = 0u64;
+    let mut did_window_resize = true;
 
     let mut input_ctx = InputCtx {
         mouse_moved: false,
@@ -583,7 +582,6 @@ pub fn main_thread_run_program() {
     let mut draw_ctx = unsafe { DrawCtx {
         window_width: 0,
         window_height: 0,
-        window_resized: true,
         draw_command_buffer: alloc(Layout::array::<DrawCommand>(8192).unwrap()) as *mut DrawCommand,
         draw_command_count: (&mut _draw_command_count) as *mut usize,
         glyph_bitmap_run_allocator: alloc(Layout::array::<(u16, i16)>(8192).unwrap()) as *mut (u16, i16),
@@ -592,8 +590,9 @@ pub fn main_thread_run_program() {
         font_tracker_count: (&mut _font_tracker_count) as *mut usize,
     }};
 
-    let mut gui_ctx = GuiCtx::new();
-    gui_ctx.style   = GuiStyle::dark();
+    let mut gui_ctx = ui::Context::new(ui::Style::dark());
+
+    let mut some_data_to_keep_around = ui::SomeDataToKeepAround{ ..Default::default() };
 
     let mut t: f64 = 0.0;
 
@@ -648,20 +647,21 @@ pub fn main_thread_run_program() {
                                         _ => {},
                                     }
                                 },
-                                winit::event::WindowEvent::Resized(size) => {
-                                    draw_ctx.window_resized = true;
-                                }
+                                winit::event::WindowEvent::Resized(_) => {
+                                    did_window_resize = true;
+                                },
                                 winit::event::WindowEvent::RedrawRequested => {
                                     if frame_is_actually_queued_by_us || okay_but_is_it_wayland(elwt) {
                                         unsafe {
                                             let mut is_anything_happening_at_all_in_any_way = false;
 
+                                            is_anything_happening_at_all_in_any_way |= did_window_resize;
                                             is_anything_happening_at_all_in_any_way |= gui_ctx.debug;
-                                            is_anything_happening_at_all_in_any_way |= draw_ctx.window_resized;
                                             is_anything_happening_at_all_in_any_way |= input_ctx.mouse_moved;
 
                                             input_ctx.mouse_pressed = 0;
                                             input_ctx.keys_pressed  = 0;
+                                            did_window_resize = false;
 
                                             for (button, state) in &input_ctx.inflight_mouse_events {
                                                 let button = match button {
@@ -792,17 +792,15 @@ pub fn main_thread_run_program() {
                                             gui_ctx.delta = dt;
                                             gui_ctx.input = &input_ctx;
                                             gui_ctx.draw  = &draw_ctx;
-                                            gui_ctx.begin_frame();
+
                                             {
-                                                let should_quit = demo_of_rendering_stuff_with_context_that_allocates_in_the_background(&mut gui_ctx);
+                                                let should_quit = ui::demo_of_rendering_stuff_with_context_that_allocates_in_the_background(&mut gui_ctx, &mut some_data_to_keep_around);
                                                 if should_quit {
                                                     elwt.exit();
                                                 }
                                             }
-                                            gui_ctx.end_frame();
 
                                             input_ctx.mouse_moved = false;
-                                            draw_ctx.window_resized = false;
 
                                             // adapter
                                             draw_commands.extend(std::slice::from_raw_parts(draw_ctx.draw_command_buffer as *const DrawCommand, *draw_ctx.draw_command_count).iter());
