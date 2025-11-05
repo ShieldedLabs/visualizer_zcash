@@ -91,7 +91,7 @@ macro_rules! bitset {
     };
 }
 
-fn magic<'a, 'b, T>(mut_ref: &'a mut T) -> &'b mut T {
+pub fn magic<'a, 'b, T>(mut_ref: &'a mut T) -> &'b mut T {
     let mut_ref = mut_ref as *mut T;
     return unsafe { &mut *mut_ref };
 }

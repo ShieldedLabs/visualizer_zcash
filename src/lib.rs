@@ -1,5 +1,6 @@
 
 mod ui;
+use ui::*;
 
 const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 0;
 
@@ -235,7 +236,13 @@ impl DrawCtx {
     }
 
     pub fn measure_text_line(&self, text_height: isize, text_line: &str) -> isize {
+        if text_height <= 0 { return 0; }
         let text_height = (text_height as usize).min(4096);
+
+        if text_height <= 2 {
+            return (4*text_height as isize * text_line.len() as isize)/3;
+        }
+
         let (tracker, _) = self._find_or_create_font_tracker(text_height, false);
         tracker.how_many_times_was_i_used += 1;
 
@@ -263,7 +270,7 @@ impl DrawCtx {
             let text_height = (text_height as usize).min(4096);
 
             if text_height <= 2 {
-                self.rectangle(text_x, text_y, text_x + (3*text_height as isize * text_line.len() as isize)/2, text_y+text_height as isize, color);
+                self.rectangle(text_x, text_y, text_x + (4*text_height as isize * text_line.len() as isize)/3, text_y+text_height as isize, color);
                 return;
             }
 
@@ -325,7 +332,13 @@ impl DrawCtx {
     }
 
     pub fn measure_mono_text_line(&self, text_height: isize, text_line: &str) -> isize {
+        if text_height <= 0 { return 0; }
         let text_height = (text_height as usize).min(4096);
+
+        if text_height <= 2 {
+            return (4*text_height as isize * text_line.len() as isize)/3;
+        }
+
         let (tracker, _) = self._find_or_create_font_tracker(text_height, true);
         tracker.how_many_times_was_i_used += 1;
 
@@ -353,7 +366,7 @@ impl DrawCtx {
             let text_height = (text_height as usize).min(4096);
 
             if text_height <= 2 {
-                self.rectangle(text_x, text_y, text_x + (3*text_height as isize * text_line.len() as isize)/2, text_y+text_height as isize, color);
+                self.rectangle(text_x, text_y, text_x + (4*text_height as isize * text_line.len() as isize)/3, text_y+text_height as isize, color);
                 return;
             }
 
@@ -630,6 +643,36 @@ pub static FONT_PIXEL_QUINQUE_FIVE: &[u8] = include_bytes!("../assets/QuinqueFiv
 pub static FONT_PIXEL_GOHU_11: &[u8] = include_bytes!("../assets/gohufont-uni-11.ttf");
 pub static FONT_PIXEL_GOHU_14: &[u8] = include_bytes!("../assets/gohufont-uni-14.ttf");
 
+static mut GLOBAL_OUTPUT_STREAM : *mut rodio::OutputStream = std::ptr::null_mut();
+pub fn setup_audio() {
+    unsafe {
+        if GLOBAL_OUTPUT_STREAM == std::ptr::null_mut() {
+            if let Ok(stream) = rodio::OutputStreamBuilder::open_default_stream() {
+                GLOBAL_OUTPUT_STREAM = alloc(Layout::new::<rodio::OutputStream>()) as *mut rodio::OutputStream;
+                copy_nonoverlapping(&stream, GLOBAL_OUTPUT_STREAM, 1);
+                std::mem::forget(stream);
+            }
+        }
+    }
+}
+
+pub fn play_sound(sound_file: &'static [u8], volume: f32) {
+    unsafe {
+        if GLOBAL_OUTPUT_STREAM != std::ptr::null_mut() {
+            let stream = &mut *GLOBAL_OUTPUT_STREAM;
+            let sink = rodio::play(stream.mixer(), std::io::Cursor::new(sound_file)).unwrap();
+            std::thread::sleep(Duration::from_secs(1));
+            // if let Ok(source) = rodio::Decoder::new() {
+            //     use rodio::source::*;
+            //     //let source = source.amplify_normalized(volume);
+            //     //stream.mixer().add(source);
+            // }
+        }
+    }
+}
+
+pub static SOUND_UI_WOOSH: &[u8] = include_bytes!("../assets/ui_woosh.ogg");
+
 pub fn main_thread_run_program() {
     // Create window + event loop.
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
@@ -749,6 +792,8 @@ pub fn main_thread_run_program() {
                 window = Some(twindow);
                 softbuffer_context = Some(context);
                 softbuffer_surface = Some(surface);
+
+                setup_audio();
             },
             event => {
                 if let Some(window) = window.as_mut() {
@@ -886,13 +931,6 @@ pub fn main_thread_run_program() {
 
                                             let dt = 1000.0 / (frame_interval_milli_hertz as f64);
 
-                                            t += dt;
-                                            let t = if (t as u64 / 10) & 1 != 0 { t } else { 0.0 };
-                                            let (fx, _fy) = loop_curve(t.powf(1.6));
-                                            let (_fx, fy) = loop_curve(t.powf(1.7));
-                                            let ix = (500.0 + fx*40.0) as u32;
-                                            let iy = (300.0 + fy*30.0) as u32;
-
                                             let mouse_box_x = input_ctx.this_mouse_pos.0 as u32;
                                             let mouse_box_y = input_ctx.this_mouse_pos.1 as u32;
 
@@ -922,6 +960,12 @@ pub fn main_thread_run_program() {
                                                     }
                                                 }
                                                 *draw_ctx.font_tracker_count = put;
+                                            }
+
+                                            if input_ctx.key_pressed(KeyCode::Space) {
+                                                println!("woosh");
+
+                                                play_sound(SOUND_UI_WOOSH, rand::random());
                                             }
 
                                             draw_ctx.mono_text_line(-10, 200, mouse_box_y as isize, "Hello | Привет | 0472ba37e", 0xffffff);

@@ -11,6 +11,7 @@ twox-hash = "2.1.2"
 rand = "0.9.2"
 rustybuzz = "0.20.1"
 swash = "0.2.6"
+rodio = "0.21.1"
 
 [profile.release]
 debug = true
