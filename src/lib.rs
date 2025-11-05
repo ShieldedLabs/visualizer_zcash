@@ -471,7 +471,7 @@ struct InputCtx {
     should_process_mouse_events: bool,
 
     inflight_mouse_events:    Vec::<(winit::event::MouseButton, winit::event::ElementState)>,
-    inflight_keyboard_events: Vec::<(winit::keyboard::KeyCode, winit::event::ElementState)>,
+    inflight_keyboard_events: Vec::<(winit::keyboard::KeyCode,  winit::event::ElementState)>,
     inflight_text_input:      String,
 
     this_mouse_pos: (isize, isize),
@@ -479,8 +479,8 @@ struct InputCtx {
 
     mouse_down:    usize,
     mouse_pressed: usize,
-    keys_down:     usize,
-    keys_pressed:  usize,
+    keys_down:     u128,
+    keys_pressed:  u128,
     text_input:    Option<String>,
 }
 
@@ -490,7 +490,7 @@ const MOUSE_RIGHT:  usize = 1 << 2;
 
 impl InputCtx {
     fn key_pressed(&self, key: winit::keyboard::KeyCode) -> bool {
-        if let Some(key) = 1usize.checked_shl(key as u32) {
+        if let Some(key) = 1u128.checked_shl(key as u32) {
             return self.keys_pressed & key == key;
         }
         else {
@@ -499,7 +499,7 @@ impl InputCtx {
     }
 
     fn key_held(&self, key: winit::keyboard::KeyCode) -> bool {
-        if let Some(key) = 1usize.checked_shl(key as u32) {
+        if let Some(key) = 1u128.checked_shl(key as u32) {
             return self.keys_down & key == key;
         }
         else {
@@ -869,7 +869,7 @@ pub fn main_thread_run_program() {
                                                 }
                                             }
                                             for (key, state) in &input_ctx.inflight_keyboard_events {
-                                                if let Some(key) = 1usize.checked_shl(*key as u32) {
+                                                if let Some(key) = 1u128.checked_shl(*key as u32) {
                                                     if state.is_pressed() {
                                                         input_ctx.keys_down    |= key;
                                                         input_ctx.keys_pressed |= key;
