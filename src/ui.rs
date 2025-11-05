@@ -114,8 +114,8 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
     let panel_w    = layout.width() * 0.25;
     let inset_amt  = 16.0;
 
-    let left_panel   = ui.container(layout.cut_from_left(panel_w).inset(inset_amt));
-    let right_panel  = ui.container_ex(layout.cut_from_right(panel_w).inset(inset_amt), Flags::DEFAULT_CONTAINER_FLAGS & !(Flags::DRAW_BACKGROUND | Flags::DRAW_BORDER));
+    let left_panel   = ui.container_ex(layout.cut_from_left(panel_w).inset(inset_amt), Flags::DEFAULT_CONTAINER_FLAGS  | Flags::RESIZABLE_X);
+    let right_panel  = ui.container_ex(layout.cut_from_right(panel_w).inset(inset_amt), Flags::DEFAULT_CONTAINER_FLAGS | Flags::RESIZABLE_X);
     let center_panel = ui.container_ex(layout.inset(inset_amt), Flags::DEFAULT_CONTAINER_FLAGS & !(Flags::DRAW_BACKGROUND | Flags::DRAW_BORDER));
 
     ui.push_parent(left_panel);
@@ -150,6 +150,10 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
             if text.len() > 0 {
                 data.messages.push(text.to_string());
             }
+        }
+
+        if ui.button("Clear Messages") {
+            data.messages.clear();
         }
 
         if ui.button(if data.can_send_messages { "Disable Textbox" } else { "Enable Textbox" }) {
@@ -380,10 +384,16 @@ impl Context {
                     widget.text_buf.clear();
                     widget.text_idx = 0;
                 }
-                if self.input().key_pressed(KeyCode::Escape) {
+
+                if (self.input().key_pressed(KeyCode::Escape))
+                || (self.input().mouse_pressed(MouseButton::Left) && self.hot_widget != widget.id)
+                {
                     self.hot_input = WidgetId::INVALID;
                 }
             }
+        }
+
+        if widget.flags.contains(Flags::RESIZABLE_X) {
         }
 
         return e;
@@ -737,7 +747,7 @@ pub struct WidgetEvents {
 
     pressed:  bool,
     released: bool,
-    dragging: bool,
+    resizing: bool,
     hovering: bool,
 
     text:      String,
