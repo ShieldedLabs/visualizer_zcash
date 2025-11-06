@@ -124,16 +124,20 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
     ui.push_parent(left_panel);
     {
         // ui.layout(&[ Size::PercentOfParent{ amount: 1.0, tolerance: 0.0 } ]);
-        if ui.button("First!") {
-            println!("pressed first!");
+        if ui.button("One") {
+            println!("pressed one!");
         }
 
-        if ui.button("Second") {
-            println!("pressed second!");
+        if ui.button("Two") {
+            println!("pressed two!");
         }
 
-        if ui.button("Third") {
-            println!("pressed third!");
+        if ui.button("Three") {
+            println!("pressed three!");
+        }
+
+        if ui.button("Four") {
+            println!("pressed four!");
         }
     }
     ui.pop_parent(left_panel);
@@ -163,9 +167,9 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
             data.can_send_messages = !data.can_send_messages;
         }
 
-        // if ui.checkbox("I am a checkbox?") {
-        //     println!("box was checked!");
-        // }
+        if ui.checkbox("I am a checkbox?") {
+            println!("box was checked!");
+        }
 
         for (i, message) in data.messages.iter().enumerate() {
             ui.label(&format!("{}##{}", message, i));
@@ -402,6 +406,13 @@ impl Context {
             }
         }
 
+        if widget.flags.has(Flags::CHECKABLE) {
+            if e.clicked {
+                self.hot_input = widget.id;
+                widget.checked = !widget.checked;
+            }
+        }
+
         if widget.flags.has(Flags::TYPEABLE) {
             if e.clicked {
                 self.hot_input = widget.id;
@@ -598,7 +609,11 @@ impl Context {
 
         if widget.flags.has(Flags::DRAW_PIP) {
             let color = style.foreground;
-            self.draw_commands.push(DrawCommand::Circle(widget.rel_rect.x1, widget.rel_rect.y1, 4.0, color));
+            self.draw_commands.push(DrawCommand::Circle(widget.rel_rect.x1 - 12.0, widget.rel_rect.y1 + (widget.rel_rect.height() / 2.0) - 1.0, 4.0, color)); // @todo style
+
+            if widget.checked {
+                self.draw_commands.push(DrawCommand::Circle(widget.rel_rect.x1 - 12.0, widget.rel_rect.y1 + (widget.rel_rect.height() / 2.0) - 1.0, 2.0, color.dim(0.25))); // @todo style
+            }
         }
 
         if widget.flags.has(Flags::DRAW_MONO_TEXT | Flags::DRAW_SERIF_TEXT) {
