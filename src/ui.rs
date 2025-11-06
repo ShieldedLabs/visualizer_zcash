@@ -539,7 +539,6 @@ impl Context {
             if widget.flags.contains(Flags::TYPEABLE) {
                 if widget.text_buf.len() > 0 {
                     text = widget.text_buf.iter().fold(String::new(), |s, c| format!("{}{}", s, c)); // Note(Sam): I will pray for forgiveness for this sin.
-println!("buf: {:?}", text);
                 }
                 else {
                     color = self.style.foreground.dim(0.5);
