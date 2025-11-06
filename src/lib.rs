@@ -472,7 +472,7 @@ struct InputCtx {
 
     inflight_mouse_events:    Vec::<(winit::event::MouseButton, winit::event::ElementState)>,
     inflight_keyboard_events: Vec::<(winit::keyboard::KeyCode,  winit::event::ElementState)>,
-    inflight_text_input:      String,
+    inflight_text_input:      Vec<char>,
 
     this_mouse_pos: (isize, isize),
     last_mouse_pos: (isize, isize),
@@ -481,7 +481,7 @@ struct InputCtx {
     mouse_pressed: usize,
     keys_down:     u128,
     keys_pressed:  u128,
-    text_input:    Option<String>,
+    text_input:    Option<Vec<char>>,
 }
 
 const MOUSE_LEFT:   usize = 1 << 0;
@@ -734,7 +734,7 @@ pub fn main_thread_run_program() {
 
         inflight_mouse_events:    Vec::new(),
         inflight_keyboard_events: Vec::new(),
-        inflight_text_input:      String::new(),
+        inflight_text_input:      Vec::new(),
 
         this_mouse_pos: (0, 0),
         last_mouse_pos: (0, 0),
@@ -823,17 +823,20 @@ pub fn main_thread_run_program() {
                                     }
                                 },
                                 winit::event::WindowEvent::KeyboardInput { device_id, event, is_synthetic } => {
-                                    if let Some(text) = event.text {
-                                        let typable = text.chars().filter(|c| *c >= ' ' && *c <= '~').collect::<String>();
-                                        input_ctx.inflight_text_input.push_str(&typable);
-                                    }
-
-                                    match event.physical_key {
-                                        winit::keyboard::PhysicalKey::Code(kc) => {
-                                            input_ctx.inflight_keyboard_events.push((kc, event.state));
+                                    if event.state.is_pressed() && event.repeat == false && event.physical_key == winit::keyboard::PhysicalKey::Code(KeyCode::KeyV) && (input_ctx.key_held(KeyCode::ControlLeft) || input_ctx.key_held(KeyCode::ControlRight))  {
+                                        input_ctx.inflight_text_input.extend(&arboard::Clipboard::new().ok().map(|mut c| c.get_text().ok()).flatten().map(|s| s.chars().collect::<Vec<char>>()).unwrap_or_default());
+                                    } else {
+                                        if let Some(text) = event.text && event.state.is_pressed() {
+                                            input_ctx.inflight_text_input.extend(text.chars().filter(|c| *c >= ' ' && *c != 0x7f as char));
                                         }
-
-                                        _ => {},
+    
+                                        match event.physical_key {
+                                            winit::keyboard::PhysicalKey::Code(kc) => {
+                                                input_ctx.inflight_keyboard_events.push((kc, event.state));
+                                            }
+    
+                                            _ => {},
+                                        }
                                     }
                                 },
                                 winit::event::WindowEvent::Resized(_) => {

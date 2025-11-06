@@ -352,7 +352,11 @@ impl Context {
                 if let Some(text) = &self.input().text_input {
                     let before_idx   = &widget.text_buf[0..widget.text_idx];
                     let after_idx    = &widget.text_buf[widget.text_idx..];
-                    widget.text_buf  = before_idx.to_string() + text + after_idx;
+                    let mut new_buf = Vec::new();
+                    new_buf.extend_from_slice(before_idx);
+                    new_buf.extend_from_slice(text);
+                    new_buf.extend_from_slice(after_idx);
+                    widget.text_buf = new_buf;
                     widget.text_idx += text.len();
                 }
 
@@ -368,13 +372,18 @@ impl Context {
                 }
                 if self.input().key_pressed(KeyCode::Backspace) {
                     if widget.text_idx > 0 {
-                        widget.text_buf.pop();
+                        widget.text_buf.remove(widget.text_idx-1);
                         widget.text_idx -= 1;
+                    }
+                }
+                if self.input().key_pressed(KeyCode::Delete) {
+                    if widget.text_idx < widget.text_buf.len() {
+                        widget.text_buf.remove(widget.text_idx);
                     }
                 }
 
                 if self.input().key_pressed(KeyCode::Enter) {
-                    e.text      = widget.text_buf.clone();
+                    e.text      = widget.text_buf.iter().fold(String::new(), |s, c| format!("{}{}", s, c)); // Note(Sam): I will pray for forgiveness for this sin.
                     e.submitted = true;
 
                     if !widget.flags.contains(Flags::KEEP_FOCUS) {
@@ -529,7 +538,8 @@ impl Context {
             let mut color = self.style.foreground;
             if widget.flags.contains(Flags::TYPEABLE) {
                 if widget.text_buf.len() > 0 {
-                    text = widget.text_buf.to_string();
+                    text = widget.text_buf.iter().fold(String::new(), |s, c| format!("{}{}", s, c)); // Note(Sam): I will pray for forgiveness for this sin.
+println!("buf: {:?}", text);
                 }
                 else {
                     color = self.style.foreground.dim(0.5);
@@ -542,21 +552,14 @@ impl Context {
         }
 
         if widget.flags.contains(Flags::TYPEABLE) && self.hot_input == widget.id {
-            let mut text = widget.text_buf.as_str();
-            if text.len() <= 0 {
-                text = " ";
-            }
+            let text_before_idx = widget.text_buf[0..widget.text_idx].iter().fold(String::new(), |s, c| format!("{}{}", s, c)); // Note(Sam): I will pray for forgiveness for this sin.
 
             let x1: f32;
             if widget.text_idx == 0 {
                 x1 = widget.rel_rect.x1 + 1.0; // @todo style
             }
-            else if widget.text_idx < text.len() {
-                let width_of_text_up_to_idx = self.draw().measure_text_line(24 /* @todo font */, &text[..widget.text_idx]) as f32;
-                x1 = widget.rel_rect.x1 + width_of_text_up_to_idx;
-            }
             else {
-                let width_of_current_text = self.draw().measure_text_line(24 /* @todo font */, &text) as f32;
+                let width_of_current_text = self.draw().measure_text_line(24 /* @todo font */, &text_before_idx) as f32;
                 x1 = widget.rel_rect.x1 + width_of_current_text as f32;
             }
 
@@ -728,7 +731,7 @@ struct Widget {
     display_text: String,
 
     text_idx: usize,
-    text_buf: String,
+    text_buf: Vec<char>,
 
     slider_value:     f32,
     slider_value_min: f32,
