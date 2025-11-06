@@ -168,9 +168,6 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
 
     ui.end_frame();
 
-    let (mx, my) = ui.input().mouse_pos();
-    ui.draw().circle(mx, my, 5, Color::rgb(1.0, 0.0, 0.0).into());
-
     return false;
 }
 
