@@ -998,7 +998,7 @@ pub fn main_thread_run_program() {
 
                                             prev_frame_time_single_threaded_us = begin_frame_instant.elapsed().as_micros() as usize;
 
-                                            
+
                                             fn blend_u32(color_1: u32, color_2: u32, blend: u32) -> u32 {
                                                 let b1 = (color_1 >> 0) & 0xff;
                                                 let g1 = (color_1 >> 8) & 0xff;
@@ -1026,7 +1026,7 @@ pub fn main_thread_run_program() {
                                                     ((srgb + 0.055) / 1.055).powf(2.4)
                                                 }
                                             }
-                                            
+
                                             #[derive(Clone, Copy)]
                                             struct ExecuteCommandBufferOnTilesCtx {
                                                 render_target_0: *mut u8,

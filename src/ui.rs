@@ -1,5 +1,5 @@
 use std::{hash::Hash};
-use winit::{dpi::Insets, event::MouseButton, keyboard::KeyCode};
+use winit::{event::MouseButton, keyboard::KeyCode};
 
 use super::*;
 
@@ -41,7 +41,7 @@ macro_rules! bitset {
         impl $name {
             $(pub const $flag: Self = Self($value);)*
 
-            pub const fn contains(&self, flag: Self) -> bool {
+            pub const fn has(&self, flag: Self) -> bool {
                 self.0 & flag.0 != 0
             }
         }
@@ -116,10 +116,14 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
 
     let left_panel   = ui.container_ex(layout.cut_from_left(panel_w).inset(inset_amt), Flags::DEFAULT_CONTAINER_FLAGS  | Flags::RESIZABLE_X);
     let right_panel  = ui.container_ex(layout.cut_from_right(panel_w).inset(inset_amt), Flags::DEFAULT_CONTAINER_FLAGS | Flags::RESIZABLE_X);
-    let center_panel = ui.container_ex(layout.inset(inset_amt), Flags::DEFAULT_CONTAINER_FLAGS & !(Flags::DRAW_BACKGROUND | Flags::DRAW_BORDER));
+
+    let center_layout = layout.inset(inset_amt);
+    let center_panel  = ui.container_ex(center_layout, Flags::DEFAULT_CONTAINER_FLAGS & !(Flags::DRAW_BACKGROUND | Flags::DRAW_BORDER));
+    ui.non_ui_drawable_area = center_layout;
 
     ui.push_parent(left_panel);
     {
+        // ui.layout(&[ Size::PercentOfParent{ amount: 1.0, tolerance: 0.0 } ]);
         if ui.button("First!") {
             println!("pressed first!");
         }
@@ -134,17 +138,16 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
     }
     ui.pop_parent(left_panel);
 
-
     ui.push_parent(center_panel);
     {
-        // @todo: this is just going to get sent back, so the BFT tree knows where to draw
+        // nothing for now
     }
     ui.pop_parent(center_panel);
 
 
     ui.push_parent(right_panel);
     {
-        let event = ui.textbox_ex("Type in me!", Flags::DEFAULT_TEXTBOX_FLAGS | if data.can_send_messages { Flags::KEEP_FOCUS } else { Flags::DISABLED });
+        let event = ui.textbox_ex("Type here!", Flags::DEFAULT_TEXTBOX_FLAGS | if data.can_send_messages { Flags::KEEP_FOCUS } else { Flags::DISABLED });
         if event.submitted {
             let text = event.text.trim();
             if text.len() > 0 {
@@ -159,6 +162,10 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
         if ui.button(if data.can_send_messages { "Disable Textbox" } else { "Enable Textbox" }) {
             data.can_send_messages = !data.can_send_messages;
         }
+
+        // if ui.checkbox("I am a checkbox?") {
+        //     println!("box was checked!");
+        // }
 
         for (i, message) in data.messages.iter().enumerate() {
             ui.label(&format!("{}##{}", message, i));
@@ -176,7 +183,7 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
 
 impl Context {
     pub fn new(style: Style) -> Self {
-        Self { style, ..Default::default() }
+        Self { default_style: style, ..Default::default() }
     }
 
     #[track_caller]
@@ -188,8 +195,9 @@ impl Context {
     #[track_caller]
     pub fn container_ex(&mut self, rect: Rect, flags: Flags) -> WidgetId {
         let widget = magic(self.make_or_get_widget(flags, None, std::panic::Location::caller()));
-        widget.size     = (Size::Exact(rect.width()), Size::Exact(rect.height()));
+        widget.size = (Size::Exact(rect.width()), Size::Exact(rect.height()));
         widget.abs_rect = rect;
+
         self.update_widget_events(widget);
         return widget.id;
     }
@@ -232,6 +240,20 @@ impl Context {
         return self.update_widget_events(widget);
     }
 
+    #[track_caller]
+    #[inline(always)]
+    pub fn checkbox(&mut self, label: &str) -> bool {
+        return self.checkbox_ex(label, Flags::DEFAULT_CHECKBOX_FLAGS).clicked;
+    }
+
+    #[track_caller]
+    pub fn checkbox_ex(&mut self, label: &str, flags: Flags) -> WidgetEvents {
+        let widget  = magic(self.make_or_get_widget(flags, Some(label), std::panic::Location::caller()));
+        let font    = Font(0); // @todo font
+        widget.size = (Size::PercentOfParent { amount: 1.0, tolerance: 0.5 }, Size::TextContent(font));
+        return self.update_widget_events(widget);
+    }
+
 
     #[track_caller]
     #[inline(always)]
@@ -249,11 +271,31 @@ impl Context {
     }
 
 
+    pub fn push_style(&mut self, style: Style) {
+        self.style_stack.push(style);
+    }
+
+    #[track_caller]
+    pub fn pop_style(&mut self) {
+        self.style_stack.pop();
+    }
+
+    pub fn get_style(&self) -> Style {
+        if self.style_stack.empty() {
+            return self.default_style;
+        }
+        else {
+            return *self.style_stack.peek();
+        }
+    }
+
+
     pub fn begin_frame(&mut self) {
         self.active_widget = WidgetId::INVALID;
         self.hot_widget    = WidgetId::INVALID;
 
         self.parents.clear();
+        self.style_stack.reset();
         self.clip_stack.reset();
         self.parent_stack.reset();
 
@@ -285,13 +327,30 @@ impl Context {
             match cmd {
                 DrawCommand::Rect(rect, Some(radius), color) => {
                     self.draw().rounded_rectangle(rect.x1 as isize, rect.y1 as isize, rect.x2 as isize, rect.y2 as isize, *radius as isize, (*color).into());
-                },
+                }
                 DrawCommand::Rect(rect, None, color) => {
                     self.draw().rectangle(rect.x1 as isize, rect.y1 as isize, rect.x2 as isize, rect.y2 as isize, (*color).into());
-                },
+                }
+                DrawCommand::Box(rect, thickness, color) => {
+                    let x1 = rect.x1 as isize;
+                    let y1 = rect.y1 as isize;
+                    let x2 = rect.x2 as isize;
+                    let y2 = rect.y2 as isize;
+                    let t  = (*thickness / 2.0) as isize;
+
+                    self.draw().rectangle(x1-t, y1-t, x1+t, y2+t, (*color).into());
+                    self.draw().rectangle(x2-t, y1-t, x2+t, y2+t, (*color).into());
+                    self.draw().rectangle(x1-t, y1-t, x2-t, y1+t, (*color).into());
+                    self.draw().rectangle(x1-t, y2-t, x2-t, y2+t, (*color).into());
+                }
+                DrawCommand::Circle(x, y, radius, color) => {
+                    self.draw().circle(*x as isize, *y as isize, *radius as isize, (*color).into());
+                }
+
                 DrawCommand::Text(_, x, y, color, text) => {
                     self.draw().text_line(*x, *y, 24, text, (*color).into());
                 },
+
                 DrawCommand::Scissor(rect) => {
                     self.draw().set_scissor(rect.x1 as isize, rect.y1 as isize, rect.x2 as isize, rect.y2 as isize);
                 }
@@ -303,7 +362,7 @@ impl Context {
 impl Context {
     fn update_widget_events(&mut self, widget: &mut Widget) -> WidgetEvents {
         let mut e = WidgetEvents::default();
-        if widget.flags.contains(Flags::HIDDEN | Flags::DISABLED) {
+        if widget.flags.has(Flags::HIDDEN | Flags::DISABLED) {
             if self.active_widget == widget.id {
                 self.active_widget = WidgetId::INVALID;
             }
@@ -319,7 +378,7 @@ impl Context {
 
         e.mouse = self.input().mouse_pos();
 
-        if widget.flags.contains(Flags::CLICKABLE) {
+        if widget.flags.has(Flags::CLICKABLE) {
             if widget.rel_rect.point_within(e.mouse.0 as f32, e.mouse.1 as f32) {
                 self.active_widget = widget.id;
             }
@@ -343,7 +402,7 @@ impl Context {
             }
         }
 
-        if widget.flags.contains(Flags::TYPEABLE) {
+        if widget.flags.has(Flags::TYPEABLE) {
             if e.clicked {
                 self.hot_input = widget.id;
             }
@@ -386,7 +445,7 @@ impl Context {
                     e.text      = widget.text_buf.iter().fold(String::new(), |s, c| format!("{}{}", s, c)); // Note(Sam): I will pray for forgiveness for this sin.
                     e.submitted = true;
 
-                    if !widget.flags.contains(Flags::KEEP_FOCUS) {
+                    if !widget.flags.has(Flags::KEEP_FOCUS) {
                         self.hot_input = WidgetId::INVALID;
                     }
 
@@ -402,17 +461,18 @@ impl Context {
             }
         }
 
-        if widget.flags.contains(Flags::RESIZABLE_X) {
+        if widget.flags.has(Flags::RESIZABLE_X) {
         }
 
         return e;
     }
 
     fn compute_absolute_widget_rect(&mut self, widget: &mut Widget) {
-        if widget.flags.contains(Flags::HIDDEN) {
+        if widget.flags.has(Flags::HIDDEN) {
             return;
         }
 
+        let style = self.get_style();
         let mut computed_width  = 0f32;
         let mut computed_height = 0f32;
 
@@ -435,7 +495,7 @@ impl Context {
 
             Size::TextContent(_font) => {
                 let text_width = self.draw().measure_text_line(24 /* @todo font */, &widget.display_text);
-                computed_width = (text_width as f32 + self.style.padding) as f32;
+                computed_width = (text_width as f32 + style.padding) as f32;
             }
 
             Size::PercentOfParent { amount: x_pct, tolerance: x_tol } => {
@@ -457,7 +517,7 @@ impl Context {
                 computed_height = height_px;
             }
             Size::TextContent(_font) => {
-                computed_height = (24f32 /* @todo font */ + self.style.padding) as f32;
+                computed_height = (24f32 /* @todo font */ + style.padding) as f32;
             }
 
             Size::PercentOfParent { amount: y_pct, tolerance: y_tol } => {
@@ -477,8 +537,8 @@ impl Context {
             for child in &widget.children {
                 let child = magic(self.widgets.get_mut(child).unwrap());
                 self.compute_absolute_widget_rect(child);
-                computed_width  = child.abs_rect.width();
-                computed_height = child.abs_rect.height();
+                computed_width  += child.abs_rect.width();
+                computed_height += child.abs_rect.height();
             }
         }
 
@@ -489,14 +549,16 @@ impl Context {
     }
 
     fn compute_relative_widget_rect(&mut self, widget: &mut Widget) {
+        let style = self.get_style();
+
         if let Some(parent_id) = widget.parent {
             let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
-            if parent.rel_row.width() < widget.abs_rect.width() + self.style.spacing {
+            if parent.rel_row.width() < widget.abs_rect.width() + style.spacing {
                 parent.rel_row = parent.rel_rect.cut_from_top(widget.abs_rect.height()); // @todo layout
             }
 
             widget.rel_rect    = parent.rel_row.cut_from_left(widget.abs_rect.width()).cut_from_top(widget.abs_rect.height());
-            parent.rel_row.x1 += self.style.spacing;
+            parent.rel_row.x1 += style.spacing;
         }
         else {
             widget.rel_rect = widget.abs_rect;
@@ -510,47 +572,53 @@ impl Context {
     }
 
     fn push_widget_draw_commands(&mut self, widget: &mut Widget) {
-        if widget.flags.contains(Flags::HIDDEN) {
+        if widget.flags.has(Flags::HIDDEN) {
             return;
         }
 
-        if self.debug {
-            self.draw_commands.push(DrawCommand::Rect(widget.rel_rect.outset(4f32), None, Color::DEBUG_MAGENTA.dim(0.5)));
-        }
+        let style = self.get_style();
 
-        if widget.flags.contains(Flags::DRAW_BORDER) {
-            self.draw_commands.push(DrawCommand::Rect(widget.rel_rect.outset(2f32), None, self.style.border));
-        }
+        if widget.flags.has(Flags::DRAW_BACKGROUND) {
+            let mut color = style.background;
+            if widget.flags.has(Flags::CLICKABLE | Flags::TYPEABLE) {
+                if self.active_widget == widget.id {
+                    color = color.dim(2.0); // @todo style
+                }
+                if self.hot_widget == widget.id {
+                    color = color.dim(0.1); // @todo style
+                }
+            }
 
-        if widget.flags.contains(Flags::DRAW_BACKGROUND) {
-            let color = if self.active_widget == widget.id {
-                self.style.accent
-            } else {
-                self.style.background
-            };
+            if widget.flags.has(Flags::DISABLED) {
+                color = color.dim(0.5);
+            }
 
-            let color = if widget.flags.contains(Flags::DISABLED) { color.dim(0.5) } else { color }; // @todo style
             self.draw_commands.push(DrawCommand::Rect(widget.rel_rect, None, color));
         }
 
-        if widget.flags.contains(Flags::DRAW_MONO_TEXT | Flags::DRAW_SERIF_TEXT) {
+        if widget.flags.has(Flags::DRAW_PIP) {
+            let color = style.foreground;
+            self.draw_commands.push(DrawCommand::Circle(widget.rel_rect.x1, widget.rel_rect.y1, 4.0, color));
+        }
+
+        if widget.flags.has(Flags::DRAW_MONO_TEXT | Flags::DRAW_SERIF_TEXT) {
             let mut text  = widget.display_text.to_string();
-            let mut color = self.style.foreground;
-            if widget.flags.contains(Flags::TYPEABLE) {
+            let mut color = style.foreground;
+            if widget.flags.has(Flags::TYPEABLE) {
                 if widget.text_buf.len() > 0 {
                     text = widget.text_buf.iter().fold(String::new(), |s, c| format!("{}{}", s, c)); // Note(Sam): I will pray for forgiveness for this sin.
                 }
                 else {
-                    color = self.style.foreground.dim(0.5);
+                    color = style.foreground.dim(0.5); // @todo style
                 }
             }
 
-            let color = if widget.flags.contains(Flags::DISABLED) { color.dim(0.5) } else { color }; // @todo style
+            let color = if widget.flags.has(Flags::DISABLED) { color.dim(0.5) } else { color }; // @todo style
             let font  = Font((widget.flags & Flags::DRAW_SERIF_TEXT).into()); // @todo font
             self.draw_commands.push(DrawCommand::Text(font, widget.rel_rect.x1 as isize, widget.rel_rect.y1 as isize, color, text));
         }
 
-        if widget.flags.contains(Flags::TYPEABLE) && self.hot_input == widget.id {
+        if widget.flags.has(Flags::TYPEABLE) && self.hot_input == widget.id {
             let text_before_idx = widget.text_buf[0..widget.text_idx].iter().fold(String::new(), |s, c| format!("{}{}", s, c)); // Note(Sam): I will pray for forgiveness for this sin.
 
             let x1: f32;
@@ -564,6 +632,14 @@ impl Context {
 
             let cursor_rect = Rect::new(x1, widget.rel_rect.y1 + 4.0, x1 + 1.0, widget.rel_rect.y2 - 4.0); // @todo style
             self.draw_commands.push(DrawCommand::Rect(cursor_rect, None, Color::DEBUG_RED)); // @todo style
+        }
+
+        if widget.flags.has(Flags::DRAW_BORDER) {
+            self.draw_commands.push(DrawCommand::Box(widget.rel_rect, 2f32 /* @todo style */, style.border));
+        }
+
+        if self.debug {
+            self.draw_commands.push(DrawCommand::Box(widget.rel_rect, 2f32 /* @todo style */, Color::DEBUG_MAGENTA.fade(0.25)));
         }
 
         for i in 0..widget.children.len() {
@@ -630,9 +706,10 @@ pub struct Context {
     pub input: *const InputCtx,
     pub draw:  *const DrawCtx,
     pub debug: bool,
+    pub non_ui_drawable_area: Rect,
 
     pub delta: f64,
-    pub style: Style,
+    pub default_style: Style,
     pub draw_commands: Vec<DrawCommand>,
 
     hot_widget:    WidgetId, // (focused, clicked)
@@ -642,6 +719,7 @@ pub struct Context {
     widgets: std::collections::HashMap<WidgetId, Widget>,
     parents: std::vec::Vec<WidgetId>,
 
+    style_stack:  Stack<Style>,
     clip_stack:   Stack<Rect>,
     parent_stack: Stack<WidgetId>,
 }
@@ -654,14 +732,16 @@ bitset!(Flags<u64>,
 
     // HOVERABLE   = 1 <<  9,
     CLICKABLE   = 1 << 10,
-    TYPEABLE    = 1 << 11,
-    RESIZABLE_X = 1 << 12,
-    RESIZABLE_Y = 1 << 13,
+    CHECKABLE   = 1 << 11,
+    TYPEABLE    = 1 << 12,
+    RESIZABLE_X = 1 << 13,
+    RESIZABLE_Y = 1 << 14,
 
     DRAW_MONO_TEXT  = 1 << 17,
     DRAW_SERIF_TEXT = 1 << 18,
     DRAW_BACKGROUND = 1 << 19,
     DRAW_BORDER     = 1 << 20,
+    DRAW_PIP        = 1 << 21,
 
     CLIP_CHILDREN = 1 << 25,
     KEEP_FOCUS    = 1 << 26,
@@ -676,6 +756,11 @@ bitset!(Flags<u64>,
                          | Flags::DRAW_MONO_TEXT.0
                          | Flags::DRAW_BACKGROUND.0
                          | Flags::DRAW_BORDER.0,
+
+    DEFAULT_CHECKBOX_FLAGS = Flags::CHECKABLE.0
+                           | Flags::CLICKABLE.0
+                           | Flags::DRAW_MONO_TEXT.0
+                           | Flags::DRAW_PIP.0,
 
     DEFAULT_TEXTBOX_FLAGS = Flags::TYPEABLE.0
                           | Flags::CLICKABLE.0
@@ -718,8 +803,7 @@ struct Widget {
 
     parent:   Option<WidgetId>,
     children: Vec<WidgetId>,
-
-    size: (Size, Size), // semantic size (x-axis, y-axis)
+    size:     (Size, Size), // semantic size (x-axis, y-axis)
 
     // CALCULATED PER FRAME
     abs_rect: Rect, // absolute rect
@@ -760,6 +844,8 @@ pub struct WidgetEvents {
 pub enum DrawCommand {
     Scissor(Rect),
     Rect(Rect, Option<isize>, Color),
+    Circle(f32, f32, f32, Color),
+    Box(Rect, f32, Color),
     Text(Font, isize, isize, Color, String),
 }
 
@@ -896,6 +982,15 @@ impl Color {
             g: self.g * factor,
             b: self.b * factor,
             a: self.a,
+        }
+    }
+
+    pub fn fade(&self, factor: f32) -> Self {
+        Self {
+            r: self.r,
+            g: self.g,
+            b: self.b,
+            a: self.a * factor,
         }
     }
 }
