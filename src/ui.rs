@@ -330,7 +330,7 @@ impl Context {
                     self.draw().rounded_rectangle(rect.x1 as isize, rect.y1 as isize, rect.x2 as isize, rect.y2 as isize, *radius as isize, (*color).into());
                 }
                 DrawCommand::Rect(rect, None, color) => {
-                    self.draw().rectangle(rect.x1 as isize, rect.y1 as isize, rect.x2 as isize, rect.y2 as isize, (*color).into());
+                    self.draw().rectangle(rect.x1, rect.y1, rect.x2, rect.y2, (*color).into());
                 }
                 DrawCommand::Box(rect, thickness, color) => {
                     let x1 = rect.x1 as isize;
@@ -339,10 +339,10 @@ impl Context {
                     let y2 = rect.y2 as isize;
                     let t  = (*thickness / 2.0) as isize;
 
-                    self.draw().rectangle(x1-t, y1-t, x1+t, y2+t, (*color).into());
-                    self.draw().rectangle(x2-t, y1-t, x2+t, y2+t, (*color).into());
-                    self.draw().rectangle(x1-t, y1-t, x2-t, y1+t, (*color).into());
-                    self.draw().rectangle(x1-t, y2-t, x2-t, y2+t, (*color).into());
+                    self.draw().rectangle((x1-t) as f32, (y1-t) as f32, (x1+t) as f32, (y2+t) as f32, (*color).into());
+                    self.draw().rectangle((x2-t) as f32, (y1-t) as f32, (x2+t) as f32, (y2+t) as f32, (*color).into());
+                    self.draw().rectangle((x1-t) as f32, (y1-t) as f32, (x2-t) as f32, (y1+t) as f32, (*color).into());
+                    self.draw().rectangle((x1-t) as f32, (y2-t) as f32, (x2-t) as f32, (y2+t) as f32, (*color).into());
                 }
                 DrawCommand::Circle(x, y, radius, color) => {
                     self.draw().circle(*x as f32, *y as f32, *radius as f32, (*color).into());
