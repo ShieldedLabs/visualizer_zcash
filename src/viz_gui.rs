@@ -72,12 +72,6 @@ pub fn viz_gui_draw_the_stuff_for_the_things(viz_state: &mut VizState, draw_ctx:
         }
     }
 
-    if input_ctx.key_held(KeyCode::ShiftLeft) {
-        draw_ctx.rectangle(input_ctx.mouse_pos().0 as f32 / 50.0, input_ctx.mouse_pos().1 as f32 / 50.0, 100.0, 100.0, 0xdd_ffFFff);
-    } else {
-        draw_ctx.rectangle(10.0, 0.0, 100.0 + input_ctx.mouse_pos().0 as f32 / 50.0, 0.0 + input_ctx.mouse_pos().1 as f32 / 50.0, 0xdd_ffFFff);
-    }
-
     draw_ctx.circle(300.0, 300.0, input_ctx.mouse_pos().0 as f32 / 20.0 + 50.0, 0xff_ffFFff);
 }
 

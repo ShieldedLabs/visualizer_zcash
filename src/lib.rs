@@ -373,9 +373,10 @@ impl DrawCtx {
             let text_height = text_height.min(4096.0);
 
             if text_height < 3.0 {
-                self.rectangle(text_x as f32, text_y as f32, (text_x as f32 + 4.0*text_height as f32 * text_line.len() as f32)/3.0, text_y as f32 + text_height as f32, (color&0xFFffFF) | ((color >> 26) << 24));
+                self.rectangle(text_x, text_y, text_x + (4.0 * text_height * text_line.len() as f32) / 3.0, text_y + text_height, (color&0xFFffFF) | ((color >> 26) << 24));
                 return;
             }
+
             let text_x = text_x.floor() as isize;
             let text_y = text_y.floor() as isize;
             let text_height = text_height.floor() as usize;
@@ -454,7 +455,7 @@ impl DrawCtx {
             let put = self.draw_command_buffer.add(*self.draw_command_count);
             *self.draw_command_count += 1;
             let thickness = if thickness < 0.0 || thickness.is_normal() == false { 0.0 } else { thickness };
-            
+
             if (x2 - x1).abs() >= (y2 - y1).abs() {
                 if x2 < x1 { swap(&mut x1, &mut x2); swap(&mut y1, &mut y2); }
                 *put = DrawCommand::PixelLineXDef { x1, x2, y1, y2, color: color, thickness: thickness };
@@ -478,7 +479,7 @@ impl DrawCtx {
             // y' = c*(x + y)
             let xr = c * (x - y);
             let yr = c * (x + y);
-            
+
             let len = (xr * xr + yr * yr).sqrt();
             if len == 0.0 {
                 (0.0, 0.0)
@@ -900,12 +901,12 @@ pub fn main_thread_run_program() {
                                         if let Some(text) = event.text && event.state.is_pressed() {
                                             input_ctx.inflight_text_input.extend(text.chars().filter(|c| *c >= ' ' && *c != 0x7f as char));
                                         }
-    
+
                                         match event.physical_key {
                                             winit::keyboard::PhysicalKey::Code(kc) => {
                                                 input_ctx.inflight_keyboard_events.push((kc, event.state));
                                             }
-    
+
                                             _ => {},
                                         }
                                     }
@@ -1081,7 +1082,7 @@ pub fn main_thread_run_program() {
 
                                             prev_frame_time_single_threaded_us = begin_frame_instant.elapsed().as_micros() as usize;
 
-                                            
+
                                             #[derive(Clone, Copy)]
                                             struct ExecuteCommandBufferOnTilesCtx {
                                                 render_target_0: *mut u8,
