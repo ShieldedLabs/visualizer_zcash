@@ -851,7 +851,7 @@ pub fn main_thread_run_program() {
             winit::event::Event::Resumed => { // Runs at startup and is where we have to do init.
                 let twindow = Rc::new(elwt.create_window(
                     winit::window::WindowAttributes::default()
-                    .with_title("winit + softbuffer")
+                    .with_title("ZCash Visualizer")
                     .with_inner_size(Size::Physical(winit::dpi::PhysicalSize { width: 1600, height: 900 }))
                 ).unwrap());
                 let context = softbuffer::Context::new(twindow.clone()).unwrap();
