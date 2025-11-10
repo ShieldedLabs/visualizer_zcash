@@ -880,6 +880,7 @@ pub fn main_thread_run_program() {
                     let softbuffer_surface = softbuffer_surface.as_mut().unwrap();
                     match event {
                         winit::event::Event::WindowEvent { window_id: _window_id, event } => {
+                            // println!("Event! :) {:?}", event);
                             match event {
                                 winit::event::WindowEvent::CursorEntered { device_id } |
                                 winit::event::WindowEvent::CursorLeft    { device_id } => {
@@ -911,8 +912,15 @@ pub fn main_thread_run_program() {
                                         }
                                     }
                                 },
+                                winit::event::WindowEvent::Moved(_)   |
                                 winit::event::WindowEvent::Resized(_) => {
                                     did_window_resize = true;
+
+                                    // Ensure our RedrawRequested handler will actually run on Windows
+                                    frame_is_actually_queued_by_us = true;
+
+                                    // Produce a frame for this size
+                                    window.request_redraw();
                                 },
                                 winit::event::WindowEvent::RedrawRequested => {
                                     if frame_is_actually_queued_by_us || okay_but_is_it_wayland(elwt) {
