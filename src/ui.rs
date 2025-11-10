@@ -109,6 +109,24 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
     if ui.input().key_pressed(KeyCode::Tab) {
         ui.debug = !ui.debug;
     }
+    if ui.input().key_pressed(KeyCode::F5) {
+        unsafe {
+            if *ui.draw().debug_pixel_inspector == None {
+                ui.pixel_inspector_primed = true;
+            } else {
+                *ui.draw().debug_pixel_inspector = None;
+                ui.pixel_inspector_primed = false;
+            }
+        }
+    }
+    if ui.pixel_inspector_primed {
+        if ui.input().mouse_pressed(MouseButton::Left) {
+            unsafe {
+                *ui.draw().debug_pixel_inspector = Some((ui.input().mouse_pos().0.clamp(0, ui.draw().window_width) as usize, ui.input().mouse_pos().1.clamp(0, ui.draw().window_height) as usize));
+            }
+            ui.pixel_inspector_primed = false;
+        }
+    }
 
     let mut layout = Rect::new(0f32, 0f32, ui.draw().window_width as f32, ui.draw().window_height as f32);
     let panel_w    = layout.width() * 0.25;
@@ -178,6 +196,20 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
     ui.pop_parent(right_panel);
 
     ui.end_frame();
+
+    if ui.pixel_inspector_primed {
+        ui.draw().mono_text_line(0.0, 0.0, 16.0, "Pixel Inspector is Primed! Click to select pixel.", 0xff_00ff00);
+    }
+    if let Some((x, y)) = unsafe { *ui.draw().debug_pixel_inspector } {
+        let x = x as isize; let y = y as isize;
+        let mut draw_x = 0;
+        let mut draw_y = 0;
+        if x < ui.draw().window_width/2 { draw_x = ui.draw().window_width - 256};
+        if y < ui.draw().window_height/2 { draw_y = ui.draw().window_height - 256};
+        let color = unsafe { *ui.draw().debug_pixel_inspector_last_color };
+        ui.draw().rectangle(draw_x as f32, draw_y as f32, draw_x as f32 + 256.0, draw_y as f32 + 256.0, 0xff_000000 | color);
+        ui.draw().mono_text_line(draw_x as f32, draw_y as f32, 12.0, &format!("({},{}) = {:X}", x, y, color), 0xff_000000 | (color ^ u32::MAX));
+    }
 
     return false;
 }
@@ -349,7 +381,7 @@ impl Context {
                 }
 
                 DrawCommand::Text(_, x, y, color, text) => {
-                    self.draw().text_line(*x, *y, 24, text, (*color).into());
+                    self.draw().text_line(*x as f32, *y as f32, 24.0, text, (*color).into());
                 },
 
                 DrawCommand::Scissor(rect) => {
@@ -718,6 +750,7 @@ pub struct Context {
     pub input: *const InputCtx,
     pub draw:  *const DrawCtx,
     pub debug: bool,
+    pub pixel_inspector_primed: bool,
     pub non_ui_drawable_area: Rect,
 
     pub delta: f64,

@@ -55,7 +55,7 @@ pub fn viz_gui_draw_the_stuff_for_the_things(viz_state: &mut VizState, draw_ctx:
         let x = viz_state.on_screen_bcs[i].x;
         let y = viz_state.on_screen_bcs[i].y;
         draw_ctx.circle(origin_x as f32 + (x*screen_unit) as f32, origin_y as f32 + (y*screen_unit) as f32, screen_unit as f32, 0xff_ffffff);
-        draw_ctx.mono_text_line((origin_x + (x + 1.5)*screen_unit) as isize, (origin_y + (y - 0.5)*screen_unit) as isize, screen_unit.floor() as isize, &format!("{:x}", XxHash3_64::oneshot(format!("bhsaerht{}", i).as_bytes())), 0xFF_ffffff);
+        draw_ctx.mono_text_line((origin_x + (x + 1.5)*screen_unit) as f32, (origin_y + (y - 0.5)*screen_unit) as f32, screen_unit.floor() as f32, &format!("{:x}", XxHash3_64::oneshot(format!("bhsaerht{}", i).as_bytes())), 0xFF_ffffff);
 
         if i > 0 {
             let px = viz_state.on_screen_bcs[i-1].x;
@@ -73,10 +73,12 @@ pub fn viz_gui_draw_the_stuff_for_the_things(viz_state: &mut VizState, draw_ctx:
     }
 
     if input_ctx.key_held(KeyCode::ShiftLeft) {
-        draw_ctx.rectangle(input_ctx.mouse_pos().0 as f32 / 50.0, input_ctx.mouse_pos().1 as f32 / 50.0, 100.0, 100.0, 0xcc_ffFFff);
+        draw_ctx.rectangle(input_ctx.mouse_pos().0 as f32 / 50.0, input_ctx.mouse_pos().1 as f32 / 50.0, 100.0, 100.0, 0xdd_ffFFff);
     } else {
-        draw_ctx.rectangle(10.0, 10.0, 100.0 + input_ctx.mouse_pos().0 as f32 / 50.0, 100.0 + input_ctx.mouse_pos().1 as f32 / 50.0, 0xcc_ffFFff);
+        draw_ctx.rectangle(10.0, 0.0, 100.0 + input_ctx.mouse_pos().0 as f32 / 50.0, 0.0 + input_ctx.mouse_pos().1 as f32 / 50.0, 0xdd_ffFFff);
     }
+
+    draw_ctx.circle(300.0, 300.0, input_ctx.mouse_pos().0 as f32 / 20.0 + 50.0, 0xff_ffFFff);
 }
 
 fn split_vector(mut x: f32, mut y: f32) -> (f32, f32, f32) {
