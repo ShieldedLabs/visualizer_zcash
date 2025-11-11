@@ -900,7 +900,9 @@ pub fn main_thread_run_program() {
                                         }
 
                                         match event.physical_key {
-                                            winit::keyboard::PhysicalKey::Code(kc) => {
+                                            winit::keyboard::PhysicalKey::Code(kc) => if kc >= winit::keyboard::KeyCode::Eject && kc <= winit::keyboard::KeyCode::Undo {
+                                                println!("Skipping key: {:?}", kc);
+                                            } else {
                                                 input_ctx.inflight_keyboard_events.push((kc, event.state));
                                             }
 
