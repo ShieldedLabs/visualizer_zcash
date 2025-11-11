@@ -71,8 +71,6 @@ pub fn viz_gui_draw_the_stuff_for_the_things(viz_state: &mut VizState, draw_ctx:
             );
         }
     }
-
-    draw_ctx.circle(300.0, 300.0, input_ctx.mouse_pos().0 as f32 / 20.0 + 50.0, 0xff_ffFFff);
 }
 
 fn split_vector(mut x: f32, mut y: f32) -> (f32, f32, f32) {
