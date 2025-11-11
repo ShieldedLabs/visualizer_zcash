@@ -1,9 +1,10 @@
+#![allow(unsafe_code)]
 
 mod ui;
 use ui::*;
 
 mod viz_gui;
-use viz_gui::*;
+pub use viz_gui::*;
 
 const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 0;
 
@@ -272,9 +273,10 @@ impl DrawCtx {
             let text_height = text_height.min(4096.0);
 
             if text_height < 3.0 {
-                self.rectangle(text_x as f32, text_y as f32, (text_x as f32 + 4.0*text_height as f32 * text_line.len() as f32)/3.0, text_y as f32 + text_height as f32, (color&0xFFffFF) | ((color >> 26) << 24));
+                self.rectangle(text_x, text_y, text_x + (1.0 * text_height * text_line.len() as f32) / 3.0, text_y + text_height, (color&0xFFffFF) | ((color >> 26) << 24));
                 return;
             }
+
             let text_x = text_x.floor() as isize;
             let text_y = text_y.floor() as isize;
             let text_height = text_height.floor() as usize;
