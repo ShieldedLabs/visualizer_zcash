@@ -930,8 +930,8 @@ pub fn main_thread_run_program() {
                                             is_anything_happening_at_all_in_any_way |= input_ctx.mouse_moved;
 
                                             input_ctx.mouse_pressed = 0;
-                                            input_ctx.keys_pressed1  = 0;
-                                            input_ctx.keys_pressed2  = 0;
+                                            input_ctx.keys_pressed1 = 0;
+                                            input_ctx.keys_pressed2 = 0;
                                             did_window_resize = false;
 
                                             for (button, state) in &input_ctx.inflight_mouse_events {
@@ -978,7 +978,8 @@ pub fn main_thread_run_program() {
                                             };
 
                                             is_anything_happening_at_all_in_any_way |= (input_ctx.mouse_down | input_ctx.mouse_pressed) != 0;
-                                            is_anything_happening_at_all_in_any_way |= (input_ctx.keys_down1  | input_ctx.keys_pressed1 | input_ctx.keys_down2  | input_ctx.keys_pressed2)  != 0;
+                                            is_anything_happening_at_all_in_any_way |= (input_ctx.keys_down1 | input_ctx.keys_pressed1) != 0;
+                                            is_anything_happening_at_all_in_any_way |= (input_ctx.keys_down2 | input_ctx.keys_pressed2) != 0;
 
                                             input_ctx.inflight_mouse_events.clear();
                                             input_ctx.inflight_keyboard_events.clear();
@@ -987,7 +988,13 @@ pub fn main_thread_run_program() {
                                             // TODO: Poll Business for spontanious events. E.g. animations are still playing. Or, we recieved new blocks to display et cetera.
                                             is_anything_happening_at_all_in_any_way |= viz_gui_anything_happened_at_all(&mut viz_state);
 
-                                            if is_anything_happening_at_all_in_any_way == false {
+                                            let (window_width, window_height) = {
+                                                let size = window.inner_size();
+                                                (size.width as usize, size.height as usize)
+                                            };
+
+                                            if is_anything_happening_at_all_in_any_way == false ||
+                                               window_width <= 0 || window_height <= 0 { // Nothing to render.
                                                 last_call_to_present_instant = Instant::now();
                                                 frame_is_actually_queued_by_us = false;
                                                 if okay_but_is_it_wayland(elwt) {
@@ -1008,10 +1015,6 @@ pub fn main_thread_run_program() {
                                             let target_frame_time_us = (1000000000.0 / (frame_interval_milli_hertz as f64)) as usize;
                                             let begin_frame_instant = Instant::now();
 
-                                            let (window_width, window_height) = {
-                                                let size = window.inner_size();
-                                                (size.width as usize, size.height as usize)
-                                            };
                                             softbuffer_surface.resize((window_width as u32).try_into().unwrap(), (window_height as u32).try_into().unwrap()).unwrap();
 
                                             let mut buffer = softbuffer_surface.buffer_mut().unwrap();
