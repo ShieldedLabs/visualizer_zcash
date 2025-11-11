@@ -152,6 +152,7 @@ impl DrawCtx {
                 how_many_times_was_i_used: 0,
                 is_mono: is_mono,
                 ttf_file,
+                cached_rusty_buzz: RbFace::from_slice(ttf_file, 0).expect("bad font"),
                 target_px_height,
                 fudge_to_px_height,
                 units_per_em,
@@ -249,14 +250,12 @@ impl DrawCtx {
         let (tracker, _) = self._find_or_create_font_tracker(text_height, false);
         tracker.how_many_times_was_i_used += 1;
 
-        let rb_face = RbFace::from_slice(tracker.ttf_file, 0).expect("bad font");
-
         let mut buf = UnicodeBuffer::new();
         buf.set_direction(rustybuzz::Direction::LeftToRight);
         buf.push_str(text_line);
         buf.set_direction(rustybuzz::Direction::LeftToRight);
 
-        let shaped = shape(&rb_face, &[], buf);
+        let shaped = shape(&tracker.cached_rusty_buzz, &[], buf);
         let infos = shaped.glyph_infos();
         let poss = shaped.glyph_positions();
         assert_eq!(infos.len(), poss.len());
@@ -283,14 +282,12 @@ impl DrawCtx {
             let (tracker, tracker_id) = self._find_or_create_font_tracker(text_height, false);
             tracker.how_many_times_was_i_used += 1;
 
-            let rb_face = RbFace::from_slice(tracker.ttf_file, 0).expect("bad font");
-
             let mut buf = UnicodeBuffer::new();
             buf.set_direction(rustybuzz::Direction::LeftToRight);
             buf.push_str(text_line);
             buf.set_direction(rustybuzz::Direction::LeftToRight);
 
-            let shaped = shape(&rb_face, &[], buf);
+            let shaped = shape(&tracker.cached_rusty_buzz, &[], buf);
             let infos = shaped.glyph_infos();
             let poss = shaped.glyph_positions();
             assert_eq!(infos.len(), poss.len());
@@ -349,14 +346,12 @@ impl DrawCtx {
         let (tracker, _) = self._find_or_create_font_tracker(text_height, true);
         tracker.how_many_times_was_i_used += 1;
 
-        let rb_face = RbFace::from_slice(tracker.ttf_file, 0).expect("bad font");
-
         let mut buf = UnicodeBuffer::new();
         buf.set_direction(rustybuzz::Direction::LeftToRight);
         buf.push_str(text_line);
         buf.set_direction(rustybuzz::Direction::LeftToRight);
 
-        let shaped = shape(&rb_face, &[], buf);
+        let shaped = shape(&tracker.cached_rusty_buzz, &[], buf);
         let infos = shaped.glyph_infos();
         let poss = shaped.glyph_positions();
         assert_eq!(infos.len(), poss.len());
@@ -383,14 +378,12 @@ impl DrawCtx {
             let (tracker, tracker_id) = self._find_or_create_font_tracker(text_height, true);
             tracker.how_many_times_was_i_used += 1;
 
-            let rb_face = RbFace::from_slice(tracker.ttf_file, 0).expect("bad font");
-
             let mut buf = UnicodeBuffer::new();
             buf.set_direction(rustybuzz::Direction::LeftToRight);
             buf.push_str(text_line);
             buf.set_direction(rustybuzz::Direction::LeftToRight);
 
-            let shaped = shape(&rb_face, &[], buf);
+            let shaped = shape(&tracker.cached_rusty_buzz, &[], buf);
             let infos = shaped.glyph_infos();
             let poss = shaped.glyph_positions();
             assert_eq!(infos.len(), poss.len());
@@ -599,6 +592,7 @@ struct FontTracker {
     target_px_height: usize,
     fudge_to_px_height: usize,
     ttf_file: &'static [u8],
+    cached_rusty_buzz: RbFace<'static>,
     units_per_em: f32,
     ppem: f32,
     glyph_row_shift: usize,
@@ -1164,7 +1158,7 @@ pub fn main_thread_run_program() {
                                                                         hasher.write_u32(color);
                                                                         if should_draw == false { continue; }
                                                                         let mut row_pixels = ctx.render_target_0.byte_add(((ix + (iy << pixel_row_shift)) as usize) << 2);
-                                                                        let color_alpha = srgb_to_linear_one_channel_float((color >> 24) as f32 / 255.0);
+                                                                        let color_alpha = (color >> 24) as f32 / 255.0;
                                                                         for _y in iy..iy2 {
                                                                             let _fy = _y as f32;
                                                                             let row_alpha = (1.0 - (ofy - _fy).clamp(0.0, 1.0)) * (ofy2 - _fy).clamp(0.0, 1.0);
@@ -1178,7 +1172,7 @@ pub fn main_thread_run_program() {
                                                                                     let ly = ofy-(_fy+1.0)+round_pixels;
                                                                                     let v1 = lx*lx.abs()+ly*ly.abs();
                                                                                     let new_alpha = round_pixels - v1.sqrt();
-                                                                                    cover_alpha = if v1 >= 0.0 { cover_alpha.min(new_alpha) } else { cover_alpha };
+                                                                                    cover_alpha = select_float(v1 >= 0.0, cover_alpha.min(new_alpha), cover_alpha,);
                                                                                 }
                                                                                 // top right
                                                                                 {
@@ -1186,7 +1180,7 @@ pub fn main_thread_run_program() {
                                                                                     let ly = ofy-(_fy+1.0)+round_pixels;
                                                                                     let v1 = lx*lx.abs()+ly*ly.abs();
                                                                                     let new_alpha = round_pixels - v1.sqrt();
-                                                                                    cover_alpha = if v1 >= 0.0 { cover_alpha.min(new_alpha) } else { cover_alpha };
+                                                                                    cover_alpha = select_float(v1 >= 0.0, cover_alpha.min(new_alpha), cover_alpha,);
                                                                                 }
                                                                                 // bottom left
                                                                                 {
@@ -1194,7 +1188,7 @@ pub fn main_thread_run_program() {
                                                                                     let ly = _fy-ofy2+round_pixels;
                                                                                     let v1 = lx*lx.abs()+ly*ly.abs();
                                                                                     let new_alpha = round_pixels - v1.sqrt();
-                                                                                    cover_alpha = if v1 >= 0.0 { cover_alpha.min(new_alpha) } else { cover_alpha };
+                                                                                    cover_alpha = select_float(v1 >= 0.0, cover_alpha.min(new_alpha), cover_alpha,);
                                                                                 }
                                                                                 // bottom right
                                                                                 {
@@ -1202,11 +1196,11 @@ pub fn main_thread_run_program() {
                                                                                     let ly = _fy-ofy2+round_pixels;
                                                                                     let v1 = lx*lx.abs()+ly*ly.abs();
                                                                                     let new_alpha = round_pixels - v1.sqrt();
-                                                                                    cover_alpha = if v1 >= 0.0 { cover_alpha.min(new_alpha) } else { cover_alpha };
+                                                                                    cover_alpha = select_float(v1 >= 0.0, cover_alpha.min(new_alpha), cover_alpha,);
                                                                                 }
                                                                                 let pixel_alpha = color_alpha * cover_alpha;
 
-                                                                                *(cursor_pixels as *mut u32) = blend_u32(*(cursor_pixels as *mut u32), color,  (linear_to_srgb_one_channel_float(pixel_alpha) * 255.0).round() as u32);
+                                                                                *(cursor_pixels as *mut u32) = blend_u32(*(cursor_pixels as *mut u32), color,  (pixel_alpha * 255.0).round() as u32);
                                                                                 cursor_pixels = cursor_pixels.byte_add(4);
                                                                             }
                                                                             row_pixels = row_pixels.byte_add(4 << pixel_row_shift);
@@ -1339,8 +1333,8 @@ pub fn main_thread_run_program() {
                                                                                 let iy2 = iy1+1;
                                                                                 let coverage1 = (iy2 as f32 - fy).clamp(0.0, thickness);
                                                                                 let coverage2 = thickness - coverage1;
-                                                                                let blend1 = 255.0 * linear_to_srgb_one_channel_float(coverage1);
-                                                                                let blend2 = 255.0 * linear_to_srgb_one_channel_float(coverage2);
+                                                                                let blend1 = 255.0 * coverage1;
+                                                                                let blend2 = 255.0 * coverage2;
 
                                                                                 if iy1 >= tile_pixel_y as isize && iy1 < tile_pixel_y2 as isize {
                                                                                     let pixel = ctx.render_target_0.byte_add(((real_x + (iy1 << pixel_row_shift)) as usize) << 2);
@@ -1361,8 +1355,8 @@ pub fn main_thread_run_program() {
                                                                                 let iy2 = iy1+1;
                                                                                 let coverage1 = (iy2 as f32 - fy).clamp(0.0, thickness - thickness.floor());
                                                                                 let coverage2 = (thickness - thickness.floor()) - coverage1;
-                                                                                let blend1 = 255.0 * linear_to_srgb_one_channel_float(coverage1);
-                                                                                let blend2 = 255.0 * linear_to_srgb_one_channel_float(coverage2);
+                                                                                let blend1 = 255.0 * coverage1;
+                                                                                let blend2 = 255.0 * coverage2;
 
                                                                                 let iy2 = iy2 + whole_pixels_i;
 
@@ -1407,8 +1401,8 @@ pub fn main_thread_run_program() {
                                                                                 let ix2 = ix1+1;
                                                                                 let coverage1 = (ix2 as f32 - fx).clamp(0.0, thickness);
                                                                                 let coverage2 = thickness - coverage1;
-                                                                                let blend1 = 255.0 * linear_to_srgb_one_channel_float(coverage1);
-                                                                                let blend2 = 255.0 * linear_to_srgb_one_channel_float(coverage2);
+                                                                                let blend1 = 255.0 * coverage1;
+                                                                                let blend2 = 255.0 * coverage2;
 
                                                                                 if ix1 >= tile_pixel_x as isize && ix1 < tile_pixel_x2 as isize {
                                                                                     let pixel = ctx.render_target_0.byte_add(((ix1 + (real_y << pixel_row_shift)) as usize) << 2);
@@ -1429,8 +1423,8 @@ pub fn main_thread_run_program() {
                                                                                 let ix2 = ix1+1;
                                                                                 let coverage1 = (ix2 as f32 - fx).clamp(0.0, thickness - thickness.floor());
                                                                                 let coverage2 = (thickness - thickness.floor()) - coverage1;
-                                                                                let blend1 = 255.0 * linear_to_srgb_one_channel_float(coverage1);
-                                                                                let blend2 = 255.0 * linear_to_srgb_one_channel_float(coverage2);
+                                                                                let blend1 = 255.0 * coverage1;
+                                                                                let blend2 = 255.0 * coverage2;
 
                                                                                 let ix2 = ix2 + whole_pixels_i;
 
@@ -1707,7 +1701,19 @@ mod tests {
     }
 }
 
+/// Returns f1 is b is true.
+#[inline(always)]
+fn select_float(b: bool, f1: f32, f2: f32) -> f32 {
+    f32::from_bits(select_u32(b, f1.to_bits(), f2.to_bits()))
+}
+/// Returns f1 is b is true.
+#[inline(always)]
+fn select_u32(b: bool, f1: u32, f2: u32) -> u32 {
+    let mask = 0u32.wrapping_sub(b as u32);
+    f2 ^ ((f1 ^ f2) & mask)
+}
 
+#[inline(always)]
 fn blend_u32(color_1: u32, color_2: u32, blend: u32) -> u32 {
     let b1 = (color_1 >> 0) & 0xff;
     let g1 = (color_1 >> 8) & 0xff;
@@ -1715,23 +1721,70 @@ fn blend_u32(color_1: u32, color_2: u32, blend: u32) -> u32 {
     let b2 = (color_2 >> 0) & 0xff;
     let g2 = (color_2 >> 8) & 0xff;
     let r2 = (color_2 >> 16) & 0xff;
-    let blend = blend.clamp(0, 255);
+    let blend = clamp_u32(blend, 0, 255);
     let b = (b1 as u32 * (255 - blend) + b2 * blend) / 255;
     let g = (g1 as u32 * (255 - blend) + g2 * blend) / 255;
     let r = (r1 as u32 * (255 - blend) + r2 * blend) / 255;
     r << 16 | g << 8 | b
 }
+#[inline(always)]
+fn clamp_u32(u: u32, min: u32, max: u32) -> u32 {
+    let v1 = select_u32(u <= min, min, u);
+    select_u32(v1 >= max, max, v1)
+}
+#[inline(always)]
 fn linear_to_srgb_one_channel_float(linear: f32) -> f32 {
     if linear <= 0.0031308 {
         12.92 * linear
     } else {
-        1.055 * linear.powf(1.0 / 2.4) - 0.055
+        1.055 * fast_powf(linear, 1.0 / 2.4)  - 0.055
     }
 }
+#[inline(always)]
 fn srgb_to_linear_one_channel_float(srgb: f32) -> f32 {
     if srgb <= 0.04045 {
         srgb / 12.92
     } else {
-        ((srgb + 0.055) / 1.055).powf(2.4)
+        fast_powf((srgb + 0.055) / 1.055, 2.4)
     }
+}
+
+#[inline(always)]
+pub fn fast_log2(x: f32) -> f32 {
+    // Decompose x = 2^e * m, with m in [1,2)
+    let ui = x.to_bits();
+    let e  = ((ui >> 23) & 0xFF) as i32 - 127;
+    let m  = f32::from_bits((ui & 0x7FFFFF) | 0x3F80_0000); // 1.m
+
+    // taylor ln(m) around 1: ln(m) ≈ t*(1 - t/2 + t^2/3)
+    // then log2(m) = ln(m) * (1/ln 2)
+    let t = m - 1.0;
+    let ln_m = t * (1.0 - 0.5 * t + (1.0/3.0) * t * t);
+    let inv_ln2 = 1.442_695_040_888_963_4_f32; // 1/ln(2)
+
+    e as f32 + ln_m * inv_ln2
+}
+
+#[inline(always)]
+pub fn fast_exp2(x: f32) -> f32 {
+    // x = i + f, i = floor(x), f in [0,1)
+    let i = x.floor();
+    let f = x - i;
+
+    // exp2(f) = e^(f ln2) ≈ 1 + a f + (a^2/2) f^2 + (a^3/6) f^3
+    let a = 0.693_147_180_559_945_3_f32; // ln(2)
+    let f2 = f * f;
+    let f3 = f2 * f;
+    let poly = 1.0 + a*f + 0.5*a*a*f2 + (a*a*a)*(1.0/6.0)*f3;
+
+    // scale by 2^i via exponent bits
+    let ei = (i as i32 + 127).clamp(0, 255);
+    let scale = f32::from_bits((ei as u32) << 23);
+    scale * poly
+}
+
+#[inline(always)]
+pub fn fast_powf(x: f32, y: f32) -> f32 {
+    // Domain: x > 0. For x<=0 you must special-case as you would with powf.
+    fast_exp2(y * fast_log2(x))
 }
