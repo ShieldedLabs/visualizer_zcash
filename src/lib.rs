@@ -242,7 +242,7 @@ impl DrawCtx {
     // TODO: Make float?
     pub fn measure_text_line(&self, text_height: isize, text_line: &str) -> isize {
         if text_height <= 0 { return 0; }
-        let text_height = (text_height as usize).min(4096);
+        let text_height = (text_height as usize).min(8192);
 
         if text_height <= 2 {
             return (4*text_height as isize * text_line.len() as isize)/3;
@@ -270,7 +270,7 @@ impl DrawCtx {
     pub fn text_line(&self, text_x: f32, text_y: f32, text_height: f32, text_line: &str, color: u32) {
         unsafe {
             if text_height <= 0.0 || text_height.is_normal() == false { return; }
-            let text_height = text_height.min(4096.0);
+            let text_height = text_height.min(8192.0);
 
             if text_height < 3.0 {
                 self.rectangle(text_x, text_y, text_x + (1.0 * text_height * text_line.len() as f32) / 3.0, text_y + text_height, (color&0xFFffFF) | ((color >> 26) << 24));
@@ -339,7 +339,7 @@ impl DrawCtx {
     // TODO: Make float?
     pub fn measure_mono_text_line(&self, text_height: isize, text_line: &str) -> isize {
         if text_height <= 0 { return 0; }
-        let text_height = (text_height as usize).min(4096);
+        let text_height = (text_height as usize).min(8192);
 
         if text_height <= 2 {
             return (4*text_height as isize * text_line.len() as isize)/3;
@@ -367,7 +367,7 @@ impl DrawCtx {
     pub fn mono_text_line(&self, text_x: f32, text_y: f32, text_height: f32, text_line: &str, color: u32) {
         unsafe {
             if text_height <= 0.0 || text_height.is_normal() == false { return; }
-            let text_height = text_height.min(4096.0);
+            let text_height = text_height.min(8192.0);
 
             if text_height < 3.0 {
                 self.rectangle(text_x, text_y, text_x + (4.0 * text_height * text_line.len() as f32) / 3.0, text_y + text_height, (color&0xFFffFF) | ((color >> 26) << 24));
@@ -501,12 +501,19 @@ impl DrawCtx {
             *put = DrawCommand::ColoredRectangle { x: x - radius, x2: x + radius, y: y - radius, y2: y + radius, round_pixels: radius, color, };
         }
     }
+    pub fn circle_square(&self, x: f32, y: f32, radius: f32, round_pixels: f32, color: u32) {
+        unsafe {
+            let put = self.draw_command_buffer.add(*self.draw_command_count);
+            *self.draw_command_count += 1;
+            *put = DrawCommand::ColoredRectangle { x: x - radius, x2: x + radius, y: y - radius, y2: y + radius, round_pixels: round_pixels, color, };
+        }
+    }
 }
 
 
 #[derive(Debug)]
 struct InputCtx {
-    mouse_moved:                bool,
+    mouse_moved:                 bool,
     should_process_mouse_events: bool,
 
     inflight_mouse_events:    Vec::<(winit::event::MouseButton, winit::event::ElementState)>,
@@ -515,16 +522,18 @@ struct InputCtx {
 
     this_mouse_pos: (isize, isize),
     last_mouse_pos: (isize, isize),
-
     scroll_delta: (f64, f64),
 
-    mouse_down:    usize,
-    mouse_pressed: usize,
-    keys_down1:     u128,
-    keys_pressed1:  u128,
-    keys_down2:     u128,
-    keys_pressed2:  u128,
-    text_input:    Option<Vec<char>>,
+    mouse_down:     usize,
+    mouse_pressed:  usize,
+    mouse_released: usize,
+    keys_down1:      u128,
+    keys_pressed1:   u128,
+    keys_released1:  u128,
+    keys_down2:      u128,
+    keys_pressed2:   u128,
+    keys_released2:  u128,
+    text_input:     Option<Vec<char>>,
 }
 
 const MOUSE_LEFT:   usize = 1 << 0;
@@ -536,13 +545,11 @@ impl InputCtx {
         if let Some(key) = 1u128.checked_shl(key as u32) {
             return self.keys_pressed1 & key == key;
         }
+        else if let Some(key) = 1u128.checked_shl(key as u32 - 128) {
+            return self.keys_pressed2 & key == key;
+        }
         else {
-            if let Some(key) = 1u128.checked_shl(key as u32 - 128) {
-                return self.keys_pressed2 & key == key;
-            }
-            else {
-                return false;
-            }
+            return false;
         }
     }
 
@@ -550,13 +557,23 @@ impl InputCtx {
         if let Some(key) = 1u128.checked_shl(key as u32) {
             return self.keys_down1 & key == key;
         }
+        else if let Some(key) = 1u128.checked_shl(key as u32 - 128) {
+            return self.keys_down2 & key == key;
+        }
         else {
-            if let Some(key) = 1u128.checked_shl(key as u32 - 128) {
-                return self.keys_down2 & key == key;
-            }
-            else {
-                return false;
-            }
+            return false;
+        }
+    }
+
+    fn key_released(&self, key: winit::keyboard::KeyCode) -> bool {
+        if let Some(key) = 1u128.checked_shl(key as u32) {
+            return self.keys_released1 & key == key;
+        }
+        else if let Some(key) = 1u128.checked_shl(key as u32 - 128) {
+            return self.keys_released2 & key == key;
+        }
+        else {
+            return false;
         }
     }
 
@@ -576,7 +593,7 @@ impl InputCtx {
             _ => 0,
         };
 
-        return self.mouse_pressed == button;
+        return (self.mouse_pressed & button) != 0;
     }
 
     fn mouse_held(&self, button: winit::event::MouseButton) -> bool {
@@ -587,7 +604,18 @@ impl InputCtx {
             _ => 0,
         };
 
-        return self.mouse_down == button;
+        return (self.mouse_down & button) != 0;
+    }
+
+    fn mouse_released(&self, button: winit::event::MouseButton) -> bool {
+        let button = match button {
+            winit::event::MouseButton::Left   => MOUSE_LEFT,
+            winit::event::MouseButton::Middle => MOUSE_MIDDLE,
+            winit::event::MouseButton::Right  => MOUSE_RIGHT,
+            _ => 0,
+        };
+
+        return (self.mouse_released & button) != 0;
     }
 }
 
@@ -740,6 +768,7 @@ pub fn play_sound(sound_file: &'static [u8], volume: f32, speed: f32) {
 }
 
 pub static SOUND_UI_WOOSH: &[u8] = include_bytes!("../assets/ui_woosh.ogg");
+pub static SOUND_UI_HOVER: &[u8] = include_bytes!("../assets/ui_hover.ogg");
 
 pub fn main_thread_run_program() {
 
@@ -802,15 +831,17 @@ pub fn main_thread_run_program() {
 
         this_mouse_pos: (0, 0),
         last_mouse_pos: (0, 0),
-
         scroll_delta: (0.0, 0.0),
 
-        mouse_down:    0,
-        mouse_pressed: 0,
-        keys_down1:    0,
-        keys_pressed1: 0,
-        keys_down2:    0,
-        keys_pressed2: 0,
+        mouse_down:     0,
+        mouse_pressed:  0,
+        mouse_released: 0,
+        keys_down1:     0,
+        keys_pressed1:  0,
+        keys_released1: 0,
+        keys_down2:     0,
+        keys_pressed2:  0,
+        keys_released2: 0,
 
         text_input: None,
     };
@@ -834,7 +865,7 @@ pub fn main_thread_run_program() {
         debug_pixel_inspector_last_color: (&mut _debug_pixel_inspector_last_color) as *mut u32,
     }};
 
-    draw_ctx._init_font_tracker(FONT_PIXEL_3X3_MONO,2, true, 4);
+    draw_ctx._init_font_tracker(FONT_PIXEL_3X3_MONO, 2, true, 4);
     draw_ctx._init_font_tracker(FONT_PIXEL_3X3_MONO, 3, true, 4);
     draw_ctx._init_font_tracker(FONT_PIXEL_3X3_MONO, 4, true, 4);
     draw_ctx._init_font_tracker(FONT_PIXEL_3X3_MONO, 5, true, 4);
@@ -863,6 +894,7 @@ pub fn main_thread_run_program() {
             winit::event::Event::Resumed => { // Runs at startup and is where we have to do init.
                 let twindow = Rc::new(elwt.create_window(
                     winit::window::WindowAttributes::default()
+                    .with_maximized(true)
                     .with_title("ZCash Visualizer")
                     .with_inner_size(Size::Physical(winit::dpi::PhysicalSize { width: 1600, height: 900 }))
                 ).unwrap());
@@ -923,7 +955,9 @@ pub fn main_thread_run_program() {
                                         }
 
                                         match event.physical_key {
-                                            winit::keyboard::PhysicalKey::Code(kc) => {
+                                            winit::keyboard::PhysicalKey::Code(kc) => if kc >= winit::keyboard::KeyCode::Eject && kc <= winit::keyboard::KeyCode::Undo {
+                                                println!("Skipping key: {:?}", kc);
+                                            } else {
                                                 input_ctx.inflight_keyboard_events.push((kc, event.state));
                                             }
 
@@ -951,9 +985,12 @@ pub fn main_thread_run_program() {
                                             is_anything_happening_at_all_in_any_way |= input_ctx.mouse_moved;
                                             is_anything_happening_at_all_in_any_way |= input_ctx.scroll_delta != (0.0, 0.0);
 
-                                            input_ctx.mouse_pressed = 0;
+                                            input_ctx.mouse_pressed  = 0;
+                                            input_ctx.mouse_released = 0;
                                             input_ctx.keys_pressed1  = 0;
                                             input_ctx.keys_pressed2  = 0;
+                                            input_ctx.keys_released1 = 0;
+                                            input_ctx.keys_released2 = 0;
                                             did_window_resize = false;
 
                                             for (button, state) in &input_ctx.inflight_mouse_events {
@@ -965,31 +1002,32 @@ pub fn main_thread_run_program() {
                                                 };
 
                                                 if state.is_pressed() {
-                                                    input_ctx.mouse_down    |= button;
-                                                    input_ctx.mouse_pressed |= button;
+                                                    input_ctx.mouse_down     |=  button;
+                                                    input_ctx.mouse_pressed  |=  button;
                                                 }
                                                 else {
-                                                    input_ctx.mouse_down &= !button;
+                                                    input_ctx.mouse_down     &= !button;
+                                                    input_ctx.mouse_released |=  button;
                                                 }
                                             }
                                             for (key, state) in &input_ctx.inflight_keyboard_events {
                                                 if let Some(key) = 1u128.checked_shl(*key as u32) {
                                                     if state.is_pressed() {
-                                                        input_ctx.keys_down1    |= key;
-                                                        input_ctx.keys_pressed1 |= key;
+                                                        input_ctx.keys_down1     |=  key;
+                                                        input_ctx.keys_pressed1  |=  key;
                                                     }
                                                     else {
-                                                        input_ctx.keys_down1    &= !key;
+                                                        input_ctx.keys_down1     &= !key;
+                                                        input_ctx.keys_released1 |=  key;
                                                     }
-                                                } else {
-                                                    if let Some(key) = 1u128.checked_shl(*key as u32 - 128) {
-                                                        if state.is_pressed() {
-                                                            input_ctx.keys_down2    |= key;
-                                                            input_ctx.keys_pressed2 |= key;
-                                                        }
-                                                        else {
-                                                            input_ctx.keys_down2    &= !key;
-                                                        }
+                                                } else if let Some(key) = 1u128.checked_shl(*key as u32 - 128) {
+                                                    if state.is_pressed() {
+                                                        input_ctx.keys_down2     |=  key;
+                                                        input_ctx.keys_pressed2  |=  key;
+                                                    }
+                                                    else {
+                                                        input_ctx.keys_down2     &= !key;
+                                                        input_ctx.keys_released2 |=  key;
                                                     }
                                                 }
                                             }
@@ -999,8 +1037,13 @@ pub fn main_thread_run_program() {
                                                 Some(input_ctx.inflight_text_input.clone())
                                             };
 
-                                            is_anything_happening_at_all_in_any_way |= (input_ctx.mouse_down | input_ctx.mouse_pressed) != 0;
-                                            is_anything_happening_at_all_in_any_way |= (input_ctx.keys_down1  | input_ctx.keys_pressed1 | input_ctx.keys_down2  | input_ctx.keys_pressed2)  != 0;
+                                         // is_anything_happening_at_all_in_any_way |= input_ctx.mouse_down     != 0;
+                                            is_anything_happening_at_all_in_any_way |= input_ctx.mouse_pressed  != 0;
+                                            is_anything_happening_at_all_in_any_way |= input_ctx.mouse_released != 0;
+
+                                         // is_anything_happening_at_all_in_any_way |= (input_ctx.keys_down1     | input_ctx.keys_down2)     != 0;
+                                            is_anything_happening_at_all_in_any_way |= (input_ctx.keys_pressed1  | input_ctx.keys_pressed2)  != 0;
+                                            is_anything_happening_at_all_in_any_way |= (input_ctx.keys_released1 | input_ctx.keys_released2) != 0;
 
                                             input_ctx.inflight_mouse_events.clear();
                                             input_ctx.inflight_keyboard_events.clear();
@@ -1009,7 +1052,13 @@ pub fn main_thread_run_program() {
                                             // TODO: Poll Business for spontanious events. E.g. animations are still playing. Or, we recieved new blocks to display et cetera.
                                             is_anything_happening_at_all_in_any_way |= viz_gui_anything_happened_at_all(&mut viz_state);
 
-                                            if is_anything_happening_at_all_in_any_way == false {
+                                            let (window_width, window_height) = {
+                                                let size = window.inner_size();
+                                                (size.width as usize, size.height as usize)
+                                            };
+
+                                            if is_anything_happening_at_all_in_any_way == false ||
+                                               window_width <= 0 || window_height <= 0 { // Nothing to render.
                                                 last_call_to_present_instant = Instant::now();
                                                 frame_is_actually_queued_by_us = false;
                                                 if okay_but_is_it_wayland(elwt) {
@@ -1030,10 +1079,6 @@ pub fn main_thread_run_program() {
                                             let target_frame_time_us = (1000000000.0 / (frame_interval_milli_hertz as f64)) as usize;
                                             let begin_frame_instant = Instant::now();
 
-                                            let (window_width, window_height) = {
-                                                let size = window.inner_size();
-                                                (size.width as usize, size.height as usize)
-                                            };
                                             softbuffer_surface.resize((window_width as u32).try_into().unwrap(), (window_height as u32).try_into().unwrap()).unwrap();
 
                                             let mut buffer = softbuffer_surface.buffer_mut().unwrap();
