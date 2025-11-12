@@ -154,9 +154,15 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
             println!("pressed two!");
         }
 
-        ui.newline_ex(ui.get_style().spacing + 24f32 /* @todo font */);
+        // ui.newline();
+
+        // ui.label("");
+
+        ui.newline_ex(0f32);
 
         ui.label("0.00000 cTAZ");
+
+        ui.newline_ex(0f32);
 
         if ui.button("Send") {
         }
@@ -201,6 +207,7 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
 
         for (i, message) in data.messages.iter().enumerate() {
             ui.label(&format!("{}##{}", message, i));
+            ui.newline_ex(0f32);
         }
     }
     ui.pop_parent(right_panel);
@@ -239,7 +246,7 @@ impl Context {
     pub fn container_ex(&mut self, rect: Rect, flags: Flags) -> WidgetId {
         let widget = magic(self.make_or_get_widget(flags, None, std::panic::Location::caller()));
         widget.size = (Size::Exact(rect.width()), Size::Exact(rect.height()));
-        widget.abs_rect = rect;
+        widget.rel_rect = rect;
 
         self.update_widget_events(widget);
         return widget.id;
@@ -320,7 +327,7 @@ impl Context {
     }
 
     #[track_caller]
-    pub fn newline_ex(&mut self, height: f32) {
+    pub fn newline_ex(&mut self, height: f32) { // @todo full rearchitecting because this is not how to do newlines long-term
         let widget  = magic(self.make_or_get_widget(Flags::NONE, None, std::panic::Location::caller()));
         widget.size = (Size::PercentOfParent { amount: 1.0, tolerance: 0.0 }, Size::Exact(height));
         self.update_widget_events(widget);
@@ -546,8 +553,8 @@ impl Context {
             for child in &widget.children {
                 let child = magic(self.widgets.get_mut(child).unwrap());
                 self.compute_absolute_widget_rect(child);
-                computed_width  += child.abs_rect.width();
-                computed_height += child.abs_rect.height();
+                computed_width  += child.rel_rect.width();
+                computed_height += child.rel_rect.height();
             }
         }
 
@@ -565,7 +572,7 @@ impl Context {
             Size::PercentOfParent { amount: x_pct, tolerance: x_tol } => {
                 if let Some(parent_id) = widget.parent {
                     let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
-                    computed_width = (parent.abs_rect.width() * x_pct - style.spacing * 2f32); // @todo tolerance
+                    computed_width = (parent.rel_rect.width() * x_pct - style.spacing * 2f32); // @todo tolerance
                 }
             }
 
@@ -587,7 +594,7 @@ impl Context {
             Size::PercentOfParent { amount: y_pct, tolerance: y_tol } => {
                 if let Some(parent_id) = widget.parent {
                     let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
-                    computed_height = (parent.abs_rect.height() * y_pct - style.spacing * 2f32); // @todo tolerance
+                    computed_height = (parent.rel_rect.height() * y_pct - style.spacing * 2f32); // @todo tolerance
                 }
             }
 
@@ -601,14 +608,14 @@ impl Context {
             for child in &widget.children {
                 let child = magic(self.widgets.get_mut(child).unwrap());
                 self.compute_absolute_widget_rect(child);
-                computed_width  += child.abs_rect.width();
-                computed_height += child.abs_rect.height();
+                computed_width  += child.rel_rect.width();
+                computed_height += child.rel_rect.height();
             }
         }
 
         if widget.parent.is_some() {
-            widget.abs_rect.x2 = computed_width;
-            widget.abs_rect.y2 = computed_height;
+            widget.rel_rect.x2 = computed_width;
+            widget.rel_rect.y2 = computed_height;
         }
     }
 
@@ -618,30 +625,30 @@ impl Context {
         if let Some(parent_id) = widget.parent {
             let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
 
-            if parent.cursor.0 > parent.rel_rect.x1 &&
-               parent.cursor.0 + widget.abs_rect.width() >= parent.rel_rect.x2 {
-                parent.cursor.1 += widget.abs_rect.height() + style.spacing;
-                parent.cursor.0 = parent.rel_rect.x1;
+            if parent.cursor.0 > parent.interior.x1 &&
+               parent.cursor.0 + widget.rel_rect.width() >= parent.interior.x2 {
+                parent.cursor.1 += widget.rel_rect.height() + style.spacing;
+                parent.cursor.0 = parent.interior.x1;
             }
 
-            widget.rel_rect = widget.abs_rect;
-            widget.rel_rect.x1 += parent.cursor.0;
-            widget.rel_rect.x2 += parent.cursor.0;
-            widget.rel_rect.y1 += parent.cursor.1;
-            widget.rel_rect.y2 += parent.cursor.1;
+            widget.interior = widget.rel_rect;
+            widget.interior.x1 += parent.cursor.0;
+            widget.interior.x2 += parent.cursor.0;
+            widget.interior.y1 += parent.cursor.1;
+            widget.interior.y2 += parent.cursor.1;
 
-            widget.viz_rect = widget.rel_rect;
+            widget.viz_rect = widget.interior;
 
-            parent.cursor.0 += widget.abs_rect.width() + style.spacing;
+            parent.cursor.0 += widget.rel_rect.width() + style.spacing;
         }
         else {
-            widget.rel_rect = widget.abs_rect;
-            widget.viz_rect = widget.abs_rect;
-            widget.rel_rect.x1 += style.spacing;
-            widget.rel_rect.x2 -= style.spacing;
-            widget.rel_rect.y1 += style.spacing;
-            widget.rel_rect.y2 -= style.spacing;
-            widget.cursor   = (widget.rel_rect.x1, widget.rel_rect.y1);
+            widget.interior = widget.rel_rect;
+            widget.viz_rect = widget.rel_rect;
+            widget.interior.x1 += style.spacing;
+            widget.interior.x2 -= style.spacing;
+            widget.interior.y1 += style.spacing;
+            widget.interior.y2 -= style.spacing;
+            widget.cursor   = (widget.interior.x1, widget.interior.y1);
         }
 
         for i in 0..widget.children.len() {
@@ -890,9 +897,9 @@ struct Widget {
     size:     (Size, Size), // semantic size (x-axis, y-axis)
 
     // CALCULATED PER FRAME
-    abs_rect: Rect,    // absolute rect
+    rel_rect: Rect,    // absolute rect
     viz_rect: Rect,    // positioned rectangle - used to render
-    rel_rect: Rect,    // interior available content rectangle
+    interior: Rect,    // interior available content rectangle
     cursor:   (f32, f32), // layout cursor
 
     // CONTROL FIELDS
