@@ -6,7 +6,7 @@ use ui::*;
 mod viz_gui;
 pub use viz_gui::*;
 
-const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 0;
+const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 1;
 
 use std::{alloc::{alloc, dealloc, Layout}, hash::Hasher, hint::spin_loop, mem::{swap, transmute, MaybeUninit}, ptr::{copy_nonoverlapping, slice_from_raw_parts}, rc::Rc, sync::{atomic::{AtomicU32, Ordering}, Barrier}, time::{Duration, Instant}, u32};
 use twox_hash::xxhash3_64;
@@ -516,6 +516,8 @@ struct InputCtx {
     this_mouse_pos: (isize, isize),
     last_mouse_pos: (isize, isize),
 
+    scroll_delta: (f64, f64),
+
     mouse_down:    usize,
     mouse_pressed: usize,
     keys_down1:     u128,
@@ -708,7 +710,7 @@ fn okay_but_is_it_wayland(elwt: &winit::event_loop::ActiveEventLoop) -> bool {
 pub static SOURCE_SERIF: &[u8] = include_bytes!("../assets/source_serif_4.ttf");
 pub static DEJA_VU_SANS_MONO: &[u8] = include_bytes!("../assets/deja_vu_sans_mono.ttf");
 pub static FONT_PIXEL_3X3_MONO: &[u8] = include_bytes!("../assets/3x3-Mono.ttf");
-pub static FONT_PIXEL_QUINQUE_FIVE: &[u8] = include_bytes!("../assets/QuinqueFive.ttf");
+pub static FONT_PIXEL_TINY5: &[u8] = include_bytes!("../assets/Tiny5-Regular.ttf");
 pub static FONT_PIXEL_GOHU_11: &[u8] = include_bytes!("../assets/gohufont-uni-11.ttf");
 pub static FONT_PIXEL_GOHU_14: &[u8] = include_bytes!("../assets/gohufont-uni-14.ttf");
 
@@ -801,6 +803,8 @@ pub fn main_thread_run_program() {
         this_mouse_pos: (0, 0),
         last_mouse_pos: (0, 0),
 
+        scroll_delta: (0.0, 0.0),
+
         mouse_down:    0,
         mouse_pressed: 0,
         keys_down1:    0,
@@ -834,10 +838,10 @@ pub fn main_thread_run_program() {
     draw_ctx._init_font_tracker(FONT_PIXEL_3X3_MONO, 3, true, 4);
     draw_ctx._init_font_tracker(FONT_PIXEL_3X3_MONO, 4, true, 4);
     draw_ctx._init_font_tracker(FONT_PIXEL_3X3_MONO, 5, true, 4);
-    draw_ctx._init_font_tracker(FONT_PIXEL_QUINQUE_FIVE, 6, true, 6);
-    draw_ctx._init_font_tracker(FONT_PIXEL_QUINQUE_FIVE, 7, true, 6);
-    draw_ctx._init_font_tracker(FONT_PIXEL_QUINQUE_FIVE, 8, true, 6);
-    draw_ctx._init_font_tracker(FONT_PIXEL_QUINQUE_FIVE, 9, true, 6);
+    draw_ctx._init_font_tracker(FONT_PIXEL_TINY5, 6, true,9);
+    draw_ctx._init_font_tracker(FONT_PIXEL_TINY5, 7, true,9);
+    draw_ctx._init_font_tracker(FONT_PIXEL_TINY5, 8, true,9);
+    draw_ctx._init_font_tracker(FONT_PIXEL_TINY5, 9, true,9);
     draw_ctx._init_font_tracker(FONT_PIXEL_GOHU_11, 10, true, 13);
     draw_ctx._init_font_tracker(FONT_PIXEL_GOHU_11, 11, true, 13);
     draw_ctx._init_font_tracker(FONT_PIXEL_GOHU_11, 12, true, 13);
@@ -886,6 +890,25 @@ pub fn main_thread_run_program() {
                                     input_ctx.this_mouse_pos = (position.x as isize, position.y as isize);
                                     input_ctx.mouse_moved    = true;
                                 },
+                                winit::event::WindowEvent::MouseWheel { device_id, delta, phase } => {
+                                    #[cfg(target_os = "macos")]
+                                    {
+
+                                    }
+                                    #[cfg(not(target_os = "macos"))]
+                                    {
+                                        match delta {
+                                            winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                                                input_ctx.scroll_delta.0 += x as f64 * 1.0;
+                                                input_ctx.scroll_delta.1 += y as f64 * 1.0;
+                                            }
+                                            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                                                input_ctx.scroll_delta.0 += pos.x * 0.2;
+                                                input_ctx.scroll_delta.1 += pos.y * 0.2;
+                                            }
+                                        }
+                                    }
+                                }
                                 winit::event::WindowEvent::MouseInput { device_id, state, button } => {
                                     if input_ctx.should_process_mouse_events {
                                         input_ctx.inflight_mouse_events.push((button, state));
@@ -926,6 +949,7 @@ pub fn main_thread_run_program() {
                                             is_anything_happening_at_all_in_any_way |= did_window_resize;
                                             is_anything_happening_at_all_in_any_way |= gui_ctx.debug;
                                             is_anything_happening_at_all_in_any_way |= input_ctx.mouse_moved;
+                                            is_anything_happening_at_all_in_any_way |= input_ctx.scroll_delta != (0.0, 0.0);
 
                                             input_ctx.mouse_pressed = 0;
                                             input_ctx.keys_pressed1  = 0;
@@ -1083,6 +1107,8 @@ pub fn main_thread_run_program() {
                                             viz_gui_draw_the_stuff_for_the_things(&mut viz_state, &draw_ctx, dt as f32, &input_ctx);
 
                                             input_ctx.mouse_moved = false;
+                                            input_ctx.last_mouse_pos = input_ctx.this_mouse_pos;
+                                            input_ctx.scroll_delta = (0.0, 0.0);
 
                                             prev_frame_time_single_threaded_us = begin_frame_instant.elapsed().as_micros() as usize;
 
@@ -1161,10 +1187,10 @@ pub fn main_thread_run_program() {
                                                                         let iy2 = (ofy2.ceil() as u32).min(tile_pixel_y2);
                                                                         if ix >= ix2 || iy >= iy2 { continue; }
                                                                         hasher.write_u64(0x854893982097);
-                                                                        hasher.write_u32(ofx.max(tile_pixel_x as f32).to_bits());
-                                                                        hasher.write_u32(ofx2.min(tile_pixel_x2 as f32).to_bits());
-                                                                        hasher.write_u32(ofy.max(tile_pixel_y as f32).to_bits());
-                                                                        hasher.write_u32(ofy2.min(tile_pixel_y2 as f32).to_bits());
+                                                                        hasher.write_u32(ofx.max(tile_pixel_x as f32 - round_pixels).to_bits());
+                                                                        hasher.write_u32(ofx2.min(tile_pixel_x2 as f32 + round_pixels).to_bits());
+                                                                        hasher.write_u32(ofy.max(tile_pixel_y as f32 - round_pixels).to_bits());
+                                                                        hasher.write_u32(ofy2.min(tile_pixel_y2 as f32 + round_pixels).to_bits());
                                                                         hasher.write_u32(round_pixels.to_bits());
                                                                         hasher.write_u32(color);
                                                                         if should_draw == false { continue; }
@@ -1328,7 +1354,7 @@ pub fn main_thread_run_program() {
                                                                         let start_x = (x1 as isize).max(tile_pixel_x as isize);
                                                                         let end_x = (x2 as isize).min(tile_pixel_x2 as isize);
                                                                         if start_x >= end_x { continue; }
-                                                                        let dy = (y2 as f32 - y1 as f32) / (x2 - x1) as f32;
+                                                                        let dy = (y2 as f32 - y1 as f32) / x2.wrapping_sub(x1) as f32;
                                                                         hasher.write_u64(0x75634593484);
                                                                         hasher.write_i16(x1);
                                                                         hasher.write_i16(x2);
@@ -1375,7 +1401,7 @@ pub fn main_thread_run_program() {
                                                                                     let pixel = ctx.render_target_0.byte_add(((real_x + (iy1 << pixel_row_shift)) as usize) << 2);
                                                                                     *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
                                                                                 }
-                                                                                for y_mid in iy1+1..iy2 {
+                                                                                for y_mid in iy1.max(tile_pixel_y as isize - 1)+1..iy2.min(tile_pixel_y2 as isize + 1) {
                                                                                     if y_mid >= tile_pixel_y as isize && y_mid < tile_pixel_y2 as isize {
                                                                                         let pixel = ctx.render_target_0.byte_add(((real_x + (y_mid << pixel_row_shift)) as usize) << 2);
                                                                                         *(pixel as *mut u32) = color;
@@ -1396,7 +1422,7 @@ pub fn main_thread_run_program() {
                                                                         let start_y = (y1 as isize).max(tile_pixel_y as isize);
                                                                         let end_y = (y2 as isize).min(tile_pixel_y2 as isize);
                                                                         if start_y >= end_y { continue; }
-                                                                        let dx = (x2 as f32 - x1 as f32) / (y2 - y1) as f32;
+                                                                        let dx = (x2 as f32 - x1 as f32) / y2.wrapping_sub(y1) as f32;
                                                                         hasher.write_u64(0x83248923897);
                                                                         hasher.write_i16(x1);
                                                                         hasher.write_i16(x2);
@@ -1443,7 +1469,7 @@ pub fn main_thread_run_program() {
                                                                                     let pixel = ctx.render_target_0.byte_add(((ix1 + (real_y << pixel_row_shift)) as usize) << 2);
                                                                                     *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
                                                                                 }
-                                                                                for x_mid in ix1+1..ix2 {
+                                                                                for x_mid in ix1.max(tile_pixel_x as isize - 1)+1..ix2.min(tile_pixel_x2 as isize + 1) {
                                                                                     if x_mid >= tile_pixel_x as isize && x_mid < tile_pixel_x2 as isize {
                                                                                         let pixel = ctx.render_target_0.byte_add(((x_mid + (real_y << pixel_row_shift)) as usize) << 2);
                                                                                         *(pixel as *mut u32) = color;
