@@ -142,21 +142,31 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
     ui.push_parent(left_panel);
     {
         // ui.layout(&[ Size::PercentOfParent{ amount: 1.0, tolerance: 0.0 } ]);
-        if ui.button("One") {
+        if ui.button("Wallet") {
             println!("pressed one!");
         }
 
-        if ui.button("Two") {
+        if ui.button("History") {
             println!("pressed two!");
         }
 
-        if ui.button("Three") {
-            println!("pressed three!");
+        if ui.button("Validators") {
+            println!("pressed two!");
         }
 
-        if ui.button("Four") {
-            println!("pressed four!");
+        ui.newline_ex(ui.get_style().spacing + 24f32 /* @todo font */);
+
+        ui.label("0.00000 cTAZ");
+
+        if ui.button("Send") {
         }
+        if ui.button_ex("Receive", Flags::DEFAULT_BUTTON_FLAGS | Flags::DISABLED).clicked {
+        }
+        if ui.button("Stake") {
+        }
+
+        let event = ui.textbox("0.00000 cTAZ"); // , Flags::DEFAULT_TEXTBOX_FLAGS | Flags::KEEP_FOCUS);
+
     }
     ui.pop_parent(left_panel);
 
@@ -303,6 +313,20 @@ impl Context {
         return self.update_widget_events(widget);
     }
 
+    #[track_caller]
+    #[inline(always)]
+    pub fn newline(&mut self) {
+        self.newline_ex(self.get_style().spacing);
+    }
+
+    #[track_caller]
+    pub fn newline_ex(&mut self, height: f32) {
+        let widget  = magic(self.make_or_get_widget(Flags::NONE, None, std::panic::Location::caller()));
+        widget.size = (Size::PercentOfParent { amount: 1.0, tolerance: 0.0 }, Size::Exact(height));
+        self.update_widget_events(widget);
+    }
+
+
 
     pub fn push_style(&mut self, style: Style) {
         self.style_stack.push(style);
@@ -412,7 +436,7 @@ impl Context {
         e.mouse = self.input().mouse_pos();
 
         if widget.flags.has(Flags::CLICKABLE) {
-            if widget.rel_rect.point_within(e.mouse.0 as f32, e.mouse.1 as f32) {
+            if widget.viz_rect.point_within(e.mouse.0 as f32, e.mouse.1 as f32) {
                 self.active_widget = widget.id;
             }
 
@@ -541,7 +565,7 @@ impl Context {
             Size::PercentOfParent { amount: x_pct, tolerance: x_tol } => {
                 if let Some(parent_id) = widget.parent {
                     let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
-                    computed_width = parent.abs_rect.width() * x_pct; // @todo tolerance
+                    computed_width = (parent.abs_rect.width() * x_pct - style.spacing * 2f32); // @todo tolerance
                 }
             }
 
@@ -563,7 +587,7 @@ impl Context {
             Size::PercentOfParent { amount: y_pct, tolerance: y_tol } => {
                 if let Some(parent_id) = widget.parent {
                     let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
-                    computed_height = parent.abs_rect.height() * y_pct; // @todo tolerance
+                    computed_height = (parent.abs_rect.height() * y_pct - style.spacing * 2f32); // @todo tolerance
                 }
             }
 
@@ -593,16 +617,31 @@ impl Context {
 
         if let Some(parent_id) = widget.parent {
             let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
-            if parent.rel_row.width() < widget.abs_rect.width() + style.spacing {
-                parent.rel_row = parent.rel_rect.cut_from_top(widget.abs_rect.height()); // @todo layout
+
+            if parent.cursor.0 > parent.rel_rect.x1 &&
+               parent.cursor.0 + widget.abs_rect.width() >= parent.rel_rect.x2 {
+                parent.cursor.1 += widget.abs_rect.height() + style.spacing;
+                parent.cursor.0 = parent.rel_rect.x1;
             }
 
-            widget.rel_rect    = parent.rel_row.cut_from_left(widget.abs_rect.width()).cut_from_top(widget.abs_rect.height());
-            parent.rel_row.x1 += style.spacing;
+            widget.rel_rect = widget.abs_rect;
+            widget.rel_rect.x1 += parent.cursor.0;
+            widget.rel_rect.x2 += parent.cursor.0;
+            widget.rel_rect.y1 += parent.cursor.1;
+            widget.rel_rect.y2 += parent.cursor.1;
+
+            widget.viz_rect = widget.rel_rect;
+
+            parent.cursor.0 += widget.abs_rect.width() + style.spacing;
         }
         else {
             widget.rel_rect = widget.abs_rect;
-            widget.rel_row  = widget.rel_rect;
+            widget.viz_rect = widget.abs_rect;
+            widget.rel_rect.x1 += style.spacing;
+            widget.rel_rect.x2 -= style.spacing;
+            widget.rel_rect.y1 += style.spacing;
+            widget.rel_rect.y2 -= style.spacing;
+            widget.cursor   = (widget.rel_rect.x1, widget.rel_rect.y1);
         }
 
         for i in 0..widget.children.len() {
@@ -633,15 +672,15 @@ impl Context {
                 color = color.dim(0.5);
             }
 
-            self.draw_commands.push(DrawCommand::Rect(widget.rel_rect, None, color));
+            self.draw_commands.push(DrawCommand::Rect(widget.viz_rect, None, color));
         }
 
         if widget.flags.has(Flags::DRAW_PIP) {
             let color = style.foreground;
-            self.draw_commands.push(DrawCommand::Circle(widget.rel_rect.x1 - 12.0, widget.rel_rect.y1 + (widget.rel_rect.height() / 2.0) - 1.0, 4.0, color)); // @todo style
+            self.draw_commands.push(DrawCommand::Circle(widget.viz_rect.x1 - 12.0, widget.viz_rect.y1 + (widget.viz_rect.height() / 2.0) - 1.0, 4.0, color)); // @todo style
 
             if widget.checked {
-                self.draw_commands.push(DrawCommand::Circle(widget.rel_rect.x1 - 12.0, widget.rel_rect.y1 + (widget.rel_rect.height() / 2.0) - 1.0, 2.0, color.dim(0.25))); // @todo style
+                self.draw_commands.push(DrawCommand::Circle(widget.viz_rect.x1 - 12.0, widget.viz_rect.y1 + (widget.viz_rect.height() / 2.0) - 1.0, 2.0, color.dim(0.25))); // @todo style
             }
         }
 
@@ -659,7 +698,7 @@ impl Context {
 
             let color = if widget.flags.has(Flags::DISABLED) { color.dim(0.5) } else { color }; // @todo style
             let font  = Font((widget.flags & Flags::DRAW_SERIF_TEXT).into()); // @todo font
-            self.draw_commands.push(DrawCommand::Text(font, widget.rel_rect.x1 as isize, widget.rel_rect.y1 as isize, color, text));
+            self.draw_commands.push(DrawCommand::Text(font, widget.viz_rect.x1 as isize, widget.viz_rect.y1 as isize, color, text));
         }
 
         if widget.flags.has(Flags::TYPEABLE) && self.hot_input == widget.id {
@@ -667,23 +706,23 @@ impl Context {
 
             let x1: f32;
             if widget.text_idx == 0 {
-                x1 = widget.rel_rect.x1 + 1.0; // @todo style
+                x1 = widget.viz_rect.x1 + 1.0; // @todo style
             }
             else {
                 let width_of_current_text = self.draw().measure_text_line(24 /* @todo font */, &text_before_idx) as f32;
-                x1 = widget.rel_rect.x1 + width_of_current_text as f32;
+                x1 = widget.viz_rect.x1 + width_of_current_text as f32;
             }
 
-            let cursor_rect = Rect::new(x1, widget.rel_rect.y1 + 4.0, x1 + 1.0, widget.rel_rect.y2 - 4.0); // @todo style
+            let cursor_rect = Rect::new(x1, widget.viz_rect.y1 + 4.0, x1 + 1.0, widget.viz_rect.y2 - 4.0); // @todo style
             self.draw_commands.push(DrawCommand::Rect(cursor_rect, None, Color::DEBUG_RED)); // @todo style
         }
 
         if widget.flags.has(Flags::DRAW_BORDER) {
-            self.draw_commands.push(DrawCommand::Box(widget.rel_rect, 2f32 /* @todo style */, style.border));
+            self.draw_commands.push(DrawCommand::Box(widget.viz_rect, 2f32 /* @todo style */, style.border));
         }
 
         if self.debug {
-            self.draw_commands.push(DrawCommand::Box(widget.rel_rect, 2f32 /* @todo style */, Color::DEBUG_MAGENTA.fade(0.25)));
+            self.draw_commands.push(DrawCommand::Box(widget.viz_rect, 2f32 /* @todo style */, Color::DEBUG_MAGENTA.fade(0.25)));
         }
 
         for i in 0..widget.children.len() {
@@ -851,9 +890,10 @@ struct Widget {
     size:     (Size, Size), // semantic size (x-axis, y-axis)
 
     // CALCULATED PER FRAME
-    abs_rect: Rect, // absolute rect
-    rel_rect: Rect, // parent-relative rect
-    rel_row:  Rect, // current row cut from rel_rect
+    abs_rect: Rect,    // absolute rect
+    viz_rect: Rect,    // positioned rectangle - used to render
+    rel_rect: Rect,    // interior available content rectangle
+    cursor:   (f32, f32), // layout cursor
 
     // CONTROL FIELDS
     display_text: String,
