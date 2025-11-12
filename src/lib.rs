@@ -6,7 +6,7 @@ use ui::*;
 mod viz_gui;
 pub use viz_gui::*;
 
-const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 1;
+const TURN_OFF_HASH_BASED_LAZY_RENDER: usize = 0;
 
 use std::{alloc::{alloc, dealloc, Layout}, hash::Hasher, hint::spin_loop, mem::{swap, transmute, MaybeUninit}, ptr::{copy_nonoverlapping, slice_from_raw_parts}, rc::Rc, sync::{atomic::{AtomicU32, Ordering}, Barrier}, time::{Duration, Instant}, u32};
 use twox_hash::xxhash3_64;
