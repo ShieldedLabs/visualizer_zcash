@@ -239,7 +239,6 @@ impl DrawCtx {
         }
     }
 
-    // TODO: Make float?
     pub fn measure_text_line(&self, text_height: f32, text_line: &str) -> f32 {
         if text_height <= 0.0 || text_height.is_normal() == false { return 0.0; }
         let text_height = text_height.min(8192.0);
@@ -262,10 +261,14 @@ impl DrawCtx {
         let poss = shaped.glyph_positions();
         assert_eq!(infos.len(), poss.len());
 
-        poss.iter().map(|g_pos| {
-            let px_advance = (((g_pos.x_advance as f32 / tracker.units_per_em) * tracker.ppem).ceil() as usize).min(1usize << tracker.glyph_row_shift);
-            px_advance
-        }).reduce(|acc, a| acc + a).unwrap() as f32
+        if poss.len() > 0 {
+            poss.iter().map(|g_pos| {
+                let px_advance = (((g_pos.x_advance as f32 / tracker.units_per_em) * tracker.ppem).ceil() as usize).min(1usize << tracker.glyph_row_shift);
+                px_advance
+            }).reduce(|acc, a| acc + a).unwrap() as f32
+        } else {
+            0.0
+        }
     }
 
     pub fn text_line(&self, text_x: f32, text_y: f32, text_height: f32, text_line: &str, color: u32) {
@@ -1145,14 +1148,14 @@ pub fn main_thread_run_program() {
                                             gui_ctx.input = &input_ctx;
                                             gui_ctx.draw  = &draw_ctx;
 
+                                            viz_gui_draw_the_stuff_for_the_things(&mut viz_state, &draw_ctx, dt as f32, &input_ctx);
+
                                             {
                                                 let should_quit = demo_of_rendering_stuff_with_context_that_allocates_in_the_background(&mut gui_ctx, &mut some_data_to_keep_around);
                                                 if should_quit {
                                                     elwt.exit();
                                                 }
                                             }
-
-                                            viz_gui_draw_the_stuff_for_the_things(&mut viz_state, &draw_ctx, dt as f32, &input_ctx);
 
                                             input_ctx.mouse_moved = false;
                                             input_ctx.last_mouse_pos = input_ctx.this_mouse_pos;
