@@ -150,7 +150,7 @@ pub fn demo_of_rendering_stuff_with_context_that_allocates_in_the_background(ui:
             println!("pressed two!");
         }
 
-        if ui.button("finalizers") {
+        if ui.button("Finalizers") {
             println!("pressed two!");
         }
 
