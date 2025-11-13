@@ -240,13 +240,14 @@ impl DrawCtx {
     }
 
     // TODO: Make float?
-    pub fn measure_text_line(&self, text_height: isize, text_line: &str) -> isize {
-        if text_height <= 0 { return 0; }
-        let text_height = (text_height as usize).min(8192);
+    pub fn measure_text_line(&self, text_height: f32, text_line: &str) -> f32 {
+        if text_height <= 0.0 || text_height.is_normal() == false { return 0.0; }
+        let text_height = text_height.min(8192.0);
 
-        if text_height <= 2 {
-            return (4*text_height as isize * text_line.len() as isize)/3;
+        if text_height < 3.0 {
+            return (1.0 * text_height * text_line.len() as f32) / 3.0;
         }
+        let text_height = text_height.floor() as usize;
 
         let (tracker, _) = self._find_or_create_font_tracker(text_height, false);
         tracker.how_many_times_was_i_used += 1;
@@ -264,7 +265,7 @@ impl DrawCtx {
         poss.iter().map(|g_pos| {
             let px_advance = (((g_pos.x_advance as f32 / tracker.units_per_em) * tracker.ppem).ceil() as usize).min(1usize << tracker.glyph_row_shift);
             px_advance
-        }).reduce(|acc, a| acc + a).unwrap() as isize
+        }).reduce(|acc, a| acc + a).unwrap() as f32
     }
 
     pub fn text_line(&self, text_x: f32, text_y: f32, text_height: f32, text_line: &str, color: u32) {
@@ -337,13 +338,15 @@ impl DrawCtx {
     }
 
     // TODO: Make float?
-    pub fn measure_mono_text_line(&self, text_height: isize, text_line: &str) -> isize {
-        if text_height <= 0 { return 0; }
-        let text_height = (text_height as usize).min(8192);
+    pub fn measure_mono_text_line(&self, text_height: f32, text_line: &str) -> f32 {
+        if text_height <= 0.0 || text_height.is_normal() == false { return 0.0; }
+        let text_height = text_height.min(8192.0);
 
-        if text_height <= 2 {
-            return (4*text_height as isize * text_line.len() as isize)/3;
+        if text_height < 3.0 {
+            return (4.0 * text_height * text_line.len() as f32) / 3.0;
         }
+
+        let text_height = text_height.floor() as usize;
 
         let (tracker, _) = self._find_or_create_font_tracker(text_height, true);
         tracker.how_many_times_was_i_used += 1;
@@ -361,7 +364,7 @@ impl DrawCtx {
         poss.iter().map(|g_pos| {
             let px_advance = (((g_pos.x_advance as f32 / tracker.units_per_em) * tracker.ppem).ceil() as usize).min(1usize << tracker.glyph_row_shift);
             px_advance
-        }).reduce(|acc, a| acc + a).unwrap() as isize
+        }).reduce(|acc, a| acc + a).unwrap() as f32
     }
 
     pub fn mono_text_line(&self, text_x: f32, text_y: f32, text_height: f32, text_line: &str, color: u32) {
@@ -1420,11 +1423,13 @@ pub fn main_thread_run_program() {
 
                                                                                 if iy1 >= tile_pixel_y as isize && iy1 < tile_pixel_y2 as isize {
                                                                                     let pixel = ctx.render_target_0.byte_add(((real_x + (iy1 << pixel_row_shift)) as usize) << 2);
-                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
+                                                                                    let this_color = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
+                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), this_color, color >> 24);
                                                                                 }
                                                                                 if iy2 >= tile_pixel_y as isize && iy2 < tile_pixel_y2 as isize {
                                                                                     let pixel = ctx.render_target_0.byte_add(((real_x + (iy2 << pixel_row_shift)) as usize) << 2);
-                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend2 as u32);
+                                                                                    let this_color = blend_u32(*(pixel as *mut u32), color, blend2 as u32);
+                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), this_color, color >> 24);
                                                                                 }
                                                                             }
                                                                         } else {
@@ -1444,17 +1449,20 @@ pub fn main_thread_run_program() {
 
                                                                                 if iy1 >= tile_pixel_y as isize && iy1 < tile_pixel_y2 as isize {
                                                                                     let pixel = ctx.render_target_0.byte_add(((real_x + (iy1 << pixel_row_shift)) as usize) << 2);
-                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
+                                                                                    let this_color = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
+                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), this_color, color >> 24);
                                                                                 }
                                                                                 for y_mid in iy1.max(tile_pixel_y as isize - 1)+1..iy2.min(tile_pixel_y2 as isize + 1) {
                                                                                     if y_mid >= tile_pixel_y as isize && y_mid < tile_pixel_y2 as isize {
                                                                                         let pixel = ctx.render_target_0.byte_add(((real_x + (y_mid << pixel_row_shift)) as usize) << 2);
-                                                                                        *(pixel as *mut u32) = color;
+                                                                                        let this_color = color;
+                                                                                        *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), this_color, color >> 24);
                                                                                     }
                                                                                 }
                                                                                 if iy2 >= tile_pixel_y as isize && iy2 < tile_pixel_y2 as isize {
                                                                                     let pixel = ctx.render_target_0.byte_add(((real_x + (iy2 << pixel_row_shift)) as usize) << 2);
-                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend2 as u32);
+                                                                                    let this_color = blend_u32(*(pixel as *mut u32), color, blend2 as u32);
+                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), this_color, color >> 24);
                                                                                 }
                                                                             }
                                                                         }
@@ -1488,11 +1496,13 @@ pub fn main_thread_run_program() {
 
                                                                                 if ix1 >= tile_pixel_x as isize && ix1 < tile_pixel_x2 as isize {
                                                                                     let pixel = ctx.render_target_0.byte_add(((ix1 + (real_y << pixel_row_shift)) as usize) << 2);
-                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
+                                                                                    let this_color = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
+                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), this_color, color >> 24);
                                                                                 }
                                                                                 if ix2 >= tile_pixel_x as isize && ix2 < tile_pixel_x2 as isize {
                                                                                     let pixel = ctx.render_target_0.byte_add(((ix2 + (real_y << pixel_row_shift)) as usize) << 2);
-                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend2 as u32);
+                                                                                    let this_color = blend_u32(*(pixel as *mut u32), color, blend2 as u32);
+                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), this_color, color >> 24);
                                                                                 }
                                                                             }
                                                                         } else {
@@ -1512,17 +1522,20 @@ pub fn main_thread_run_program() {
 
                                                                                 if ix1 >= tile_pixel_x as isize && ix1 < tile_pixel_x2 as isize {
                                                                                     let pixel = ctx.render_target_0.byte_add(((ix1 + (real_y << pixel_row_shift)) as usize) << 2);
-                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
+                                                                                    let this_color = blend_u32(*(pixel as *mut u32), color, blend1 as u32);
+                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), this_color, color >> 24);
                                                                                 }
                                                                                 for x_mid in ix1.max(tile_pixel_x as isize - 1)+1..ix2.min(tile_pixel_x2 as isize + 1) {
                                                                                     if x_mid >= tile_pixel_x as isize && x_mid < tile_pixel_x2 as isize {
                                                                                         let pixel = ctx.render_target_0.byte_add(((x_mid + (real_y << pixel_row_shift)) as usize) << 2);
-                                                                                        *(pixel as *mut u32) = color;
+                                                                                        let this_color = color;
+                                                                                        *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), this_color, color >> 24);
                                                                                     }
                                                                                 }
                                                                                 if ix2 >= tile_pixel_x as isize && ix2 < tile_pixel_x2 as isize {
                                                                                     let pixel = ctx.render_target_0.byte_add(((ix2 + (real_y << pixel_row_shift)) as usize) << 2);
-                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), color, blend2 as u32);
+                                                                                    let this_color = blend_u32(*(pixel as *mut u32), color, blend2 as u32);
+                                                                                    *(pixel as *mut u32) = blend_u32(*(pixel as *mut u32), this_color, color >> 24);
                                                                                 }
                                                                             }
                                                                         }

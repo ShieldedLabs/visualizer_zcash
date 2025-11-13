@@ -534,7 +534,7 @@ impl Context {
             }
 
             Size::TextContent(_font) => {
-                let text_width = self.draw().measure_text_line(24 /* @todo font */, &widget.display_text);
+                let text_width = self.draw().measure_text_line(24.0 /* @todo font */, &widget.display_text);
                 computed_width = (text_width as f32 + style.padding) as f32;
             }
 
@@ -670,7 +670,7 @@ impl Context {
                 x1 = widget.rel_rect.x1 + 1.0; // @todo style
             }
             else {
-                let width_of_current_text = self.draw().measure_text_line(24 /* @todo font */, &text_before_idx) as f32;
+                let width_of_current_text = self.draw().measure_text_line(24.0 /* @todo font */, &text_before_idx) as f32;
                 x1 = widget.rel_rect.x1 + width_of_current_text as f32;
             }
 
