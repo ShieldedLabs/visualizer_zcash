@@ -529,6 +529,7 @@ struct InputCtx {
     this_mouse_pos: (isize, isize),
     last_mouse_pos: (isize, isize),
     scroll_delta: (f64, f64),
+    zoom_delta: f64,
 
     mouse_down:     usize,
     mouse_pressed:  usize,
@@ -838,6 +839,7 @@ pub fn main_thread_run_program() {
         this_mouse_pos: (0, 0),
         last_mouse_pos: (0, 0),
         scroll_delta: (0.0, 0.0),
+        zoom_delta: 0.0,
 
         mouse_down:     0,
         mouse_pressed:  0,
@@ -928,33 +930,30 @@ pub fn main_thread_run_program() {
                                     input_ctx.this_mouse_pos = (position.x as isize, position.y as isize);
                                     input_ctx.mouse_moved    = true;
                                 },
-                                winit::event::WindowEvent::PanGesture { device_id, delta, phase } => {
-                                    
-                                }
                                 winit::event::WindowEvent::PinchGesture { device_id, delta, phase } => {
-                                    
-                                }
-                                winit::event::WindowEvent::RotationGesture { device_id, delta, phase } => {
-                                    
-                                }
-                                winit::event::WindowEvent::DoubleTapGesture { device_id } => {
-                                    
+                                    input_ctx.zoom_delta += delta * 10.0;
                                 }
                                 winit::event::WindowEvent::MouseWheel { device_id, delta, phase } => {
                                     #[cfg(target_os = "macos")]
                                     {
-
+                                        match delta {
+                                            winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                                                input_ctx.zoom_delta -= y as f64 * 0.4;
+                                            }
+                                            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                                                input_ctx.scroll_delta.0 += pos.x * 2.0;
+                                                input_ctx.scroll_delta.1 += pos.y * 2.0;
+                                            }
+                                        }
                                     }
                                     #[cfg(not(target_os = "macos"))]
                                     {
                                         match delta {
                                             winit::event::MouseScrollDelta::LineDelta(x, y) => {
-                                                input_ctx.scroll_delta.0 += x as f64 * 1.0;
-                                                input_ctx.scroll_delta.1 += y as f64 * 1.0;
+                                                input_ctx.zoom_delta += y as f64 * 1.0;
                                             }
                                             winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                                                input_ctx.scroll_delta.0 += pos.x * 0.2;
-                                                input_ctx.scroll_delta.1 += pos.y * 0.2;
+                                                input_ctx.zoom_delta += pos.y * 0.2;
                                             }
                                         }
                                     }
@@ -1002,6 +1001,7 @@ pub fn main_thread_run_program() {
                                             is_anything_happening_at_all_in_any_way |= gui_ctx.debug;
                                             is_anything_happening_at_all_in_any_way |= input_ctx.mouse_moved;
                                             is_anything_happening_at_all_in_any_way |= input_ctx.scroll_delta != (0.0, 0.0);
+                                            is_anything_happening_at_all_in_any_way |= input_ctx.zoom_delta != 0.0;
 
                                             input_ctx.mouse_pressed  = 0;
                                             input_ctx.mouse_released = 0;
@@ -1172,6 +1172,7 @@ pub fn main_thread_run_program() {
                                             input_ctx.mouse_moved = false;
                                             input_ctx.last_mouse_pos = input_ctx.this_mouse_pos;
                                             input_ctx.scroll_delta = (0.0, 0.0);
+                                            input_ctx.zoom_delta = 0.0;
 
                                             prev_frame_time_single_threaded_us = begin_frame_instant.elapsed().as_micros() as usize;
 
