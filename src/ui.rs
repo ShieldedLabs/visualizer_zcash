@@ -452,6 +452,7 @@ impl Context {
                     e.pressed = true;
                     self.hot_widget = widget.id;
                 }
+                e.hovering = true;
             }
 
             if self.hot_widget == widget.id {
@@ -547,6 +548,8 @@ impl Context {
         let mut computed_width  = 0f32;
         let mut computed_height = 0f32;
 
+        let border_width = if widget.flags.has(Flags::DRAW_BORDER) { style.border_width } else { 0f32 };
+
         // SumOfChildren is the only thing that requires computing children first
         let must_compute_children_first = matches!(widget.size, (Size::SumOfChildren { .. }, _) | (_, Size::SumOfChildren { .. }));
         if must_compute_children_first {
@@ -566,13 +569,13 @@ impl Context {
 
             Size::TextContent(_font) => {
                 let text_width = self.draw().measure_text_line(24.0 /* @todo font */, &widget.display_text);
-                computed_width = text_width as f32 + (style.padding + style.border_width) * 2f32;
+                computed_width = text_width as f32 + (style.padding + border_width) * 2f32;
             }
 
             Size::PercentOfParent { amount: x_pct, tolerance: x_tol } => {
                 if let Some(parent_id) = widget.parent {
                     let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
-                    computed_width = parent.rel_rect.width() * x_pct - (style.spacing + style.border_width) * 2f32; // @todo tolerance
+                    computed_width = parent.rel_rect.width() * x_pct - (style.spacing + border_width) * 2f32; // @todo tolerance
                 }
             }
 
@@ -588,13 +591,13 @@ impl Context {
                 computed_height = height_px;
             }
             Size::TextContent(_font) => {
-                computed_height = 24f32 /* @todo font */ + (style.padding + style.border_width) * 2f32;
+                computed_height = 24f32 /* @todo font */ + (style.padding + border_width) * 2f32;
             }
 
             Size::PercentOfParent { amount: y_pct, tolerance: y_tol } => {
                 if let Some(parent_id) = widget.parent {
                     let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
-                    computed_height = parent.rel_rect.height() * y_pct - (style.spacing + style.border_width) * 2f32; // @todo tolerance
+                    computed_height = parent.rel_rect.height() * y_pct - (style.spacing + border_width) * 2f32; // @todo tolerance
                 }
             }
 
@@ -622,13 +625,16 @@ impl Context {
     fn compute_relative_widget_rect(&mut self, widget: &mut Widget) {
         let style = self.get_style();
 
+        let border_width = if widget.flags.has(Flags::DRAW_BORDER) { style.border_width } else { 0f32 };
+
         if let Some(parent_id) = widget.parent {
             let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
 
             if parent.cursor.0 > parent.interior.x1 &&
                parent.cursor.0 + widget.rel_rect.width() >= parent.interior.x2 {
-                parent.cursor.1 += widget.rel_rect.height() + style.spacing;
+                parent.cursor.1 += parent.line_height + style.spacing;
                 parent.cursor.0 = parent.interior.x1;
+                parent.line_height = 0f32;
             }
 
             widget.interior = widget.rel_rect;
@@ -640,14 +646,15 @@ impl Context {
             widget.viz_rect = widget.interior;
 
             parent.cursor.0 += widget.rel_rect.width() + style.spacing;
+            parent.line_height = parent.line_height.max(widget.rel_rect.height());
         }
         else {
             widget.interior = widget.rel_rect;
             widget.viz_rect = widget.rel_rect;
-            widget.interior.x1 += style.spacing + style.border_width;
-            widget.interior.x2 -= style.spacing + style.border_width;
-            widget.interior.y1 += style.spacing + style.border_width;
-            widget.interior.y2 -= style.spacing + style.border_width;
+            widget.interior.x1 += style.spacing + border_width;
+            widget.interior.x2 -= style.spacing + border_width;
+            widget.interior.y1 += style.spacing + border_width;
+            widget.interior.y2 -= style.spacing + border_width;
             widget.cursor   = (widget.interior.x1, widget.interior.y1);
         }
 
@@ -912,6 +919,7 @@ struct Widget {
     viz_rect: Rect,    // positioned rectangle - used to render
     interior: Rect,    // interior available content rectangle
     cursor:   (f32, f32), // layout cursor
+    line_height: f32, // max height of all items on this line
 
     // CONTROL FIELDS
     display_text: String,
