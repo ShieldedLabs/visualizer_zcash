@@ -664,6 +664,8 @@ impl Context {
 
         let style = self.get_style();
 
+        let border_width = if widget.flags.has(Flags::DRAW_BORDER) { style.border_width } else { 0f32 };
+
         let mut widget_color = style.background;
         if widget.flags.has(Flags::CLICKABLE | Flags::TYPEABLE) {
             if self.active_widget == widget.id {
@@ -681,15 +683,15 @@ impl Context {
         if widget.flags.has(Flags::DRAW_BACKGROUND) {
             let color = if widget.flags.has(Flags::DRAW_BORDER) { style.border } else { widget_color };
             self.draw_commands.push(DrawCommand::Rect(widget.viz_rect, Some(style.rounded_corner_radius as isize), color));
-        }
 
-        if widget.flags.has(Flags::DRAW_BORDER) {
-            let mut r = widget.viz_rect;
-            r.x1 += style.border_width;
-            r.x2 -= style.border_width;
-            r.y1 += style.border_width;
-            r.y2 -= style.border_width;
-            self.draw_commands.push(DrawCommand::Rect(r, Some((style.rounded_corner_radius * 7f32 / 8f32) as isize), widget_color));
+            if widget.flags.has(Flags::DRAW_BORDER) {
+                let mut r = widget.viz_rect;
+                r.x1 += style.border_width;
+                r.x2 -= style.border_width;
+                r.y1 += style.border_width;
+                r.y2 -= style.border_width;
+                self.draw_commands.push(DrawCommand::Rect(r, Some((style.rounded_corner_radius * 7f32 / 8f32) as isize), widget_color));
+            }
         }
 
         if widget.flags.has(Flags::DRAW_PIP) {
@@ -716,8 +718,8 @@ impl Context {
             let color = if widget.flags.has(Flags::DISABLED) { color.dim(0.5) } else { color }; // @todo style
             let font  = Font((widget.flags & Flags::DRAW_SERIF_TEXT).into()); // @todo font
             let (mut x, mut y) = (widget.viz_rect.x1, widget.viz_rect.y1);
-            x += style.border_width + style.padding;
-            y += style.border_width + style.padding;
+            x += border_width + style.padding;
+            y += border_width + style.padding;
             self.draw_commands.push(DrawCommand::Text(font, x as isize, y as isize, color, text));
         }
 
@@ -726,11 +728,11 @@ impl Context {
 
             let x1: f32;
             if widget.text_idx == 0 {
-                x1 = widget.viz_rect.x1 + 1.0; // @todo style
+                x1 = widget.viz_rect.x1 + 1.0 + border_width + style.padding; // @todo style
             }
             else {
                 let width_of_current_text = self.draw().measure_text_line(24.0 /* @todo font */, &text_before_idx) as f32;
-                x1 = widget.viz_rect.x1 + width_of_current_text as f32;
+                x1 = widget.viz_rect.x1 + border_width + style.padding + width_of_current_text as f32;
             }
 
             let cursor_rect = Rect::new(x1, widget.viz_rect.y1 + 4.0, x1 + 1.0, widget.viz_rect.y2 - 4.0); // @todo style
