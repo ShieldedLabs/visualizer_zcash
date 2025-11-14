@@ -928,6 +928,18 @@ pub fn main_thread_run_program() {
                                     input_ctx.this_mouse_pos = (position.x as isize, position.y as isize);
                                     input_ctx.mouse_moved    = true;
                                 },
+                                winit::event::WindowEvent::PanGesture { device_id, delta, phase } => {
+                                    
+                                }
+                                winit::event::WindowEvent::PinchGesture { device_id, delta, phase } => {
+                                    
+                                }
+                                winit::event::WindowEvent::RotationGesture { device_id, delta, phase } => {
+                                    
+                                }
+                                winit::event::WindowEvent::DoubleTapGesture { device_id } => {
+                                    
+                                }
                                 winit::event::WindowEvent::MouseWheel { device_id, delta, phase } => {
                                     #[cfg(target_os = "macos")]
                                     {
