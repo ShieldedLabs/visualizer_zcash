@@ -952,8 +952,9 @@ pub fn main_thread_run_program() {
                                             winit::event::MouseScrollDelta::LineDelta(x, y) => {
                                                 input_ctx.zoom_delta += y as f64 * 1.0;
                                             }
+                                            // GRRRRRR. NO PINCH SUPPORT ON WINDOWS OR LINUX. THANK YOU WINIT DEVS.
                                             winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                                                input_ctx.zoom_delta += pos.y * 0.2;
+                                                input_ctx.zoom_delta += pos.y * 0.05;
                                             }
                                         }
                                     }
