@@ -246,7 +246,7 @@ impl Context {
     pub fn container_ex(&mut self, rect: Rect, flags: Flags) -> WidgetId {
         let widget = magic(self.make_or_get_widget(flags, None, std::panic::Location::caller()));
         widget.size = (Size::Exact(rect.width()), Size::Exact(rect.height()));
-        widget.rel_rect = rect;
+        widget.abs_rect = rect;
 
         self.update_widget_events(widget);
         return widget.id;
@@ -556,8 +556,8 @@ impl Context {
             for child in &widget.children {
                 let child = magic(self.widgets.get_mut(child).unwrap());
                 self.compute_absolute_widget_rect(child);
-                computed_width  += child.rel_rect.width();
-                computed_height += child.rel_rect.height();
+                computed_width  += child.abs_rect.width();
+                computed_height += child.abs_rect.height();
             }
         }
 
@@ -575,7 +575,7 @@ impl Context {
             Size::PercentOfParent { amount: x_pct, tolerance: x_tol } => {
                 if let Some(parent_id) = widget.parent {
                     let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
-                    computed_width = parent.rel_rect.width() * x_pct - (style.spacing + border_width) * 2f32; // @todo tolerance
+                    computed_width = parent.abs_rect.width() * x_pct - (style.spacing + border_width) * 2f32; // @todo tolerance
                 }
             }
 
@@ -597,7 +597,7 @@ impl Context {
             Size::PercentOfParent { amount: y_pct, tolerance: y_tol } => {
                 if let Some(parent_id) = widget.parent {
                     let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
-                    computed_height = parent.rel_rect.height() * y_pct - (style.spacing + border_width) * 2f32; // @todo tolerance
+                    computed_height = parent.abs_rect.height() * y_pct - (style.spacing + border_width) * 2f32; // @todo tolerance
                 }
             }
 
@@ -611,14 +611,14 @@ impl Context {
             for child in &widget.children {
                 let child = magic(self.widgets.get_mut(child).unwrap());
                 self.compute_absolute_widget_rect(child);
-                computed_width  += child.rel_rect.width();
-                computed_height += child.rel_rect.height();
+                computed_width  += child.abs_rect.width();
+                computed_height += child.abs_rect.height();
             }
         }
 
         if widget.parent.is_some() {
-            widget.rel_rect.x2 = computed_width;
-            widget.rel_rect.y2 = computed_height;
+            widget.abs_rect.x2 = computed_width;
+            widget.abs_rect.y2 = computed_height;
         }
     }
 
@@ -631,13 +631,13 @@ impl Context {
             let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
 
             if parent.cursor.0 > parent.interior.x1 &&
-               parent.cursor.0 + widget.rel_rect.width() >= parent.interior.x2 {
+               parent.cursor.0 + widget.abs_rect.width() >= parent.interior.x2 {
                 parent.cursor.1 += parent.line_height + style.spacing;
                 parent.cursor.0 = parent.interior.x1;
                 parent.line_height = 0f32;
             }
 
-            widget.interior = widget.rel_rect;
+            widget.interior = widget.abs_rect;
             widget.interior.x1 += parent.cursor.0;
             widget.interior.x2 += parent.cursor.0;
             widget.interior.y1 += parent.cursor.1;
@@ -645,12 +645,12 @@ impl Context {
 
             widget.viz_rect = widget.interior;
 
-            parent.cursor.0 += widget.rel_rect.width() + style.spacing;
-            parent.line_height = parent.line_height.max(widget.rel_rect.height());
+            parent.cursor.0 += widget.abs_rect.width() + style.spacing;
+            parent.line_height = parent.line_height.max(widget.abs_rect.height());
         }
         else {
-            widget.interior = widget.rel_rect;
-            widget.viz_rect = widget.rel_rect;
+            widget.interior = widget.abs_rect;
+            widget.viz_rect = widget.abs_rect;
             widget.interior.x1 += style.spacing + border_width;
             widget.interior.x2 -= style.spacing + border_width;
             widget.interior.y1 += style.spacing + border_width;
@@ -697,7 +697,7 @@ impl Context {
                 r.x2 -= style.border_width;
                 r.y1 += style.border_width;
                 r.y2 -= style.border_width;
-                self.draw_commands.push(DrawCommand::Rect(r, Some((style.rounded_corner_radius * 7f32 / 8f32) as isize), widget_color));
+                self.draw_commands.push(DrawCommand::Rect(r, Some((style.rounded_corner_radius - style.border_width * 0.5f32).max(0f32) as isize), widget_color));
             }
         }
 
@@ -915,7 +915,7 @@ struct Widget {
     size:     (Size, Size), // semantic size (x-axis, y-axis)
 
     // CALCULATED PER FRAME
-    rel_rect: Rect,    // absolute rect
+    abs_rect: Rect,    // absolute rect
     viz_rect: Rect,    // positioned rectangle - used to render
     interior: Rect,    // interior available content rectangle
     cursor:   (f32, f32), // layout cursor
