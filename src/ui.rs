@@ -267,6 +267,10 @@ impl Context {
         Self { default_style: style, zoom: 1f32, dpi_scale: 1f32, scale: 1f32, ..Default::default() }
     }
 
+    pub fn scale(&self, size: f32) -> f32 {
+        (size * self.scale).floor()
+    }
+
     #[track_caller]
     #[inline(always)]
     pub fn container(&mut self, rect: Rect) -> WidgetId {
@@ -276,7 +280,7 @@ impl Context {
     #[track_caller]
     pub fn container_ex(&mut self, rect: Rect, flags: Flags) -> WidgetId {
         let widget = magic(self.make_or_get_widget(flags, None, std::panic::Location::caller()));
-        widget.size = (Size::Exact(rect.width() * self.scale), Size::Exact(rect.height() * self.scale));
+        widget.size = (Size::Exact(self.scale(rect.width())), Size::Exact(self.scale(rect.height())));
         widget.abs_rect = rect;
 
         self.update_widget_events(widget);
@@ -360,7 +364,7 @@ impl Context {
     #[track_caller]
     pub fn newline_ex(&mut self, height: f32) { // @todo full rearchitecting because this is not how to do newlines long-term
         let widget  = magic(self.make_or_get_widget(Flags::NONE, None, std::panic::Location::caller()));
-        widget.size = (Size::PercentOfParent { amount: 1.0, tolerance: 0.0 }, Size::Exact(height * self.scale));
+        widget.size = (Size::PercentOfParent { amount: 1.0, tolerance: 0.0 }, Size::Exact(self.scale(height)));
         self.update_widget_events(widget);
     }
 
@@ -443,7 +447,7 @@ impl Context {
                 }
 
                 DrawCommand::Text(_, x, y, color, text) => {
-                    self.draw().text_line(*x as f32, *y as f32, 24.0 * self.scale, text, (*color).into());
+                    self.draw().text_line(*x as f32, *y as f32, self.scale(24.0), text, (*color).into());
                 },
 
                 DrawCommand::Scissor(rect) => {
@@ -599,14 +603,14 @@ impl Context {
             }
 
             Size::TextContent(_font) => {
-                let text_width = self.draw().measure_text_line(24.0 * self.scale /* @todo font */, &widget.display_text);
-                computed_width = text_width as f32 + (style.padding + border_width) * 2f32;
+                let text_width = self.draw().measure_text_line(self.scale(24.0) /* @todo font */, &widget.display_text);
+                computed_width = text_width as f32 + self.scale(style.padding + border_width) * 2f32;
             }
 
             Size::PercentOfParent { amount: x_pct, tolerance: x_tol } => {
                 if let Some(parent_id) = widget.parent {
                     let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
-                    computed_width = parent.abs_rect.width() * x_pct - (style.spacing + border_width) * 2f32; // @todo tolerance
+                    computed_width = parent.abs_rect.width() * x_pct - self.scale(style.spacing + border_width) * 2f32; // @todo tolerance
                 }
             }
 
@@ -622,13 +626,13 @@ impl Context {
                 computed_height = height_px;
             }
             Size::TextContent(_font) => {
-                computed_height = 24f32 * self.scale /* @todo font */ + (style.padding + border_width) * 2f32;
+                computed_height = self.scale(24f32 /* @todo font */ + (style.padding + border_width) * 2f32);
             }
 
             Size::PercentOfParent { amount: y_pct, tolerance: y_tol } => {
                 if let Some(parent_id) = widget.parent {
                     let parent = magic(self.widgets.get_mut(&parent_id).unwrap());
-                    computed_height = parent.abs_rect.height() * y_pct - (style.spacing + border_width) * 2f32; // @todo tolerance
+                    computed_height = parent.abs_rect.height() * y_pct - self.scale(style.spacing + border_width) * 2f32; // @todo tolerance
                 }
             }
 
@@ -687,10 +691,10 @@ impl Context {
         else {
             widget.interior = widget.abs_rect;
             widget.viz_rect = widget.abs_rect;
-            widget.interior.x1 += style.spacing + border_width;
-            widget.interior.x2 -= style.spacing + border_width;
-            widget.interior.y1 += style.spacing + border_width;
-            widget.interior.y2 -= style.spacing + border_width;
+            widget.interior.x1 += self.scale(style.spacing + border_width);
+            widget.interior.x2 -= self.scale(style.spacing + border_width);
+            widget.interior.y1 += self.scale(style.spacing + border_width);
+            widget.interior.y2 -= self.scale(style.spacing + border_width);
             widget.cursor   = (widget.interior.x1, widget.interior.y1);
         }
 
@@ -725,15 +729,15 @@ impl Context {
 
         if widget.flags.has(Flags::DRAW_BACKGROUND) {
             let color = if widget.flags.has(Flags::DRAW_BORDER) { style.border } else { widget_color };
-            self.draw_commands.push(DrawCommand::Rect(widget.viz_rect, Some(style.rounded_corner_radius as isize), color));
+            self.draw_commands.push(DrawCommand::Rect(widget.viz_rect, Some(self.scale(style.rounded_corner_radius) as isize), color));
 
             if widget.flags.has(Flags::DRAW_BORDER) {
                 let mut r = widget.viz_rect;
-                r.x1 += style.border_width;
-                r.x2 -= style.border_width;
-                r.y1 += style.border_width;
-                r.y2 -= style.border_width;
-                self.draw_commands.push(DrawCommand::Rect(r, Some((style.rounded_corner_radius - style.border_width * 0.5f32).max(0f32) as isize), widget_color));
+                r.x1 += self.scale(style.border_width);
+                r.x2 -= self.scale(style.border_width);
+                r.y1 += self.scale(style.border_width);
+                r.y2 -= self.scale(style.border_width);
+                self.draw_commands.push(DrawCommand::Rect(r, Some(self.scale(style.rounded_corner_radius - style.border_width * 0.5f32).max(0f32) as isize), widget_color));
             }
         }
 
@@ -761,8 +765,8 @@ impl Context {
             let color = if widget.flags.has(Flags::DISABLED) { color.dim(0.5) } else { color }; // @todo style
             let font  = Font((widget.flags & Flags::DRAW_SERIF_TEXT).into()); // @todo font
             let (mut x, mut y) = (widget.viz_rect.x1, widget.viz_rect.y1);
-            x += border_width + style.padding;
-            y += border_width + style.padding;
+            x += self.scale(border_width + style.padding);
+            y += self.scale(border_width + style.padding);
             self.draw_commands.push(DrawCommand::Text(font, x as isize, y as isize, color, text));
         }
 
@@ -771,19 +775,19 @@ impl Context {
 
             let x1: f32;
             if widget.text_idx == 0 {
-                x1 = widget.viz_rect.x1 + 1.0 + border_width + style.padding; // @todo style
+                x1 = widget.viz_rect.x1 + self.scale(1.0 + border_width + style.padding); // @todo style
             }
             else {
-                let width_of_current_text = self.draw().measure_text_line(24.0 * self.scale /* @todo font */, &text_before_idx) as f32;
-                x1 = widget.viz_rect.x1 + border_width + style.padding + width_of_current_text as f32;
+                let width_of_current_text = self.draw().measure_text_line(self.scale(24.0) /* @todo font */, &text_before_idx) as f32;
+                x1 = widget.viz_rect.x1 + self.scale(border_width + style.padding) + width_of_current_text as f32;
             }
 
-            let cursor_rect = Rect::new(x1, widget.viz_rect.y1 + 4.0, x1 + 1.0, widget.viz_rect.y2 - 4.0); // @todo style
+            let cursor_rect = Rect::new(x1, widget.viz_rect.y1 + self.scale(4.0), x1 + self.scale(1.0), widget.viz_rect.y2 - self.scale(4.0)); // @todo style
             self.draw_commands.push(DrawCommand::Rect(cursor_rect, None, Color::DEBUG_RED)); // @todo style
         }
 
         if self.debug {
-            self.draw_commands.push(DrawCommand::Box(widget.viz_rect, style.border_width, Color::DEBUG_MAGENTA.fade(0.25)));
+            self.draw_commands.push(DrawCommand::Box(widget.viz_rect, self.scale(style.border_width), Color::DEBUG_MAGENTA.fade(0.25)));
         }
 
         for i in 0..widget.children.len() {
